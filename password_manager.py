@@ -4,10 +4,10 @@ import logging
 import os
 from datetime import datetime, timedelta
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import password_generator
-from postgresql import get_db_connection
+from vault_crypto import VaultCryptoError, load_encrypted_file, save_encrypted_file
 
 try:
     from openpyxl import Workbook, load_workbook
@@ -70,27 +70,26 @@ EXPORT_HEADERS = {
 class PasswordManagerApp:
     """Main application controller for GUI interactions and user workflows."""
 
-    def __init__(self, root):
+    def __init__(self, root, master_password):
         """Initialize the root window, storage backend, and user interface."""
         self.root = root
         self.root.title("Password Manager")
         self.root.geometry("1320x760")
         self.root.minsize(1180, 680)
-        self.storage = StorageManager()
+        self.storage = StorageManager(master_password)
         self.tabs = {}
         self.reminder_tree = None
         self.settings_vars = {}
         self.settings_status_var = tk.StringVar(value="")
 
         self.build_ui()
-        self.warn_if_json_fallback()
         self.load_all_tabs()
         self.refresh_reminder_tab()
         self.check_password_reminders()
 
     def handle_ui_exception(self, title, user_message, action, exc):
         """Log detailed failure information and show a safe generic error."""
-        backend = "postgresql" if self.storage.use_database else "json_fallback"
+        backend = "encrypted_local_vault"
         LOGGER.exception(
             "ui_error action=%s backend=%s error_type=%s",
             action,
@@ -98,13 +97,6 @@ class PasswordManagerApp:
             exc.__class__.__name__,
         )
         messagebox.showerror(title, user_message)
-
-    def warn_if_json_fallback(self):
-        """Warn users when PostgreSQL is unavailable and JSON fallback is active."""
-        if not self.storage.fallback_warning:
-            return
-
-        messagebox.showwarning("Storage Warning", self.storage.fallback_warning)
 
     def build_ui(self):
         """Build notebook tabs for accounts and reminders."""
@@ -156,7 +148,17 @@ class PasswordManagerApp:
         ttk.Entry(form_frame, textvariable=username_var, width=30).grid(row=1, column=1, sticky="we", padx=5, pady=5)
 
         ttk.Label(form_frame, text="Password").grid(row=1, column=2, sticky="w", padx=5, pady=5)
-        ttk.Entry(form_frame, textvariable=password_var, width=30).grid(row=1, column=3, sticky="we", padx=5, pady=5)
+        password_entry = ttk.Entry(form_frame, textvariable=password_var, width=30, show="•")
+        password_entry.grid(row=1, column=3, sticky="we", padx=5, pady=5)
+        show_password_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            form_frame,
+            text="Show",
+            variable=show_password_var,
+            command=lambda entry=password_entry, flag=show_password_var: entry.configure(
+                show="" if flag.get() else "•"
+            ),
+        ).grid(row=1, column=4, sticky="w", padx=5, pady=5)
 
         ttk.Label(form_frame, text="Notes").grid(row=2, column=0, sticky="w", padx=5, pady=5)
         ttk.Entry(form_frame, textvariable=notes_var, width=90).grid(row=2, column=1, columnspan=3, sticky="we", padx=5, pady=5)
@@ -185,7 +187,7 @@ class PasswordManagerApp:
             command=lambda key=category_key: self.export_template_records(key),
         ).pack(side="left", padx=4)
 
-        storage_type = "PostgreSQL" if self.storage.use_database else "JSON fallback"
+        storage_type = "Encrypted local vault"
         ttk.Label(button_frame, text=f"{category_label} | Storage: {storage_type}").pack(side="right", padx=4)
 
         columns = ("employee_name", "account_name", "username", "account_password", "notes")
@@ -216,6 +218,8 @@ class PasswordManagerApp:
             "username_var": username_var,
             "password_var": password_var,
             "notes_var": notes_var,
+            "password_entry": password_entry,
+            "show_password_var": show_password_var,
             "tree": tree,
             "selected_id": None,
         }
@@ -267,6 +271,7 @@ class PasswordManagerApp:
 
     def load_tab_data(self, category_key, search_filters=None):
         """Populate one account tab Treeview, optionally filtered by supported fields."""
+        self.clear_fields(category_key)
         tree = self.tabs[category_key]["tree"]
         for item_id in tree.get_children():
             tree.delete(item_id)
@@ -281,7 +286,7 @@ class PasswordManagerApp:
                     row["employee_name"],
                     row["account_name"],
                     row["username"],
-                    row["account_password"],
+                    "••••••••",
                     row.get("notes") or "",
                 ),
             )
@@ -320,11 +325,21 @@ class PasswordManagerApp:
         selected_id = selected[0]
         self.tabs[category_key]["selected_id"] = selected_id
         values = tree.item(selected_id, "values")
+        self.tabs[category_key]["show_password_var"].set(False)
+        self.tabs[category_key]["password_entry"].configure(show="•")
+        try:
+            record = self.storage.fetch_record(category_key, int(selected_id))
+        except Exception as exc:
+            self.handle_ui_exception("Load Error", "Unable to load the selected record.", "select_record", exc)
+            return
+        if not record:
+            self.tabs[category_key]["selected_id"] = None
+            return
 
         self.tabs[category_key]["employee_var"].set(values[0])
         self.tabs[category_key]["account_var"].set(values[1])
         self.tabs[category_key]["username_var"].set(values[2])
-        self.tabs[category_key]["password_var"].set(values[3])
+        self.tabs[category_key]["password_var"].set(record["account_password"])
         self.tabs[category_key]["notes_var"].set(values[4])
 
     def clear_fields(self, category_key):
@@ -334,6 +349,8 @@ class PasswordManagerApp:
         self.tabs[category_key]["username_var"].set("")
         self.tabs[category_key]["password_var"].set("")
         self.tabs[category_key]["notes_var"].set("")
+        self.tabs[category_key]["show_password_var"].set(False)
+        self.tabs[category_key]["password_entry"].configure(show="•")
         self.tabs[category_key]["selected_id"] = None
 
         tree = self.tabs[category_key]["tree"]
@@ -436,6 +453,7 @@ class PasswordManagerApp:
             "account_name": self.tabs[category_key]["account_var"].get().strip(),
             "username": self.tabs[category_key]["username_var"].get().strip(),
         }
+        self.clear_fields(category_key)
         self.load_tab_data(category_key, search_filters=search_filters)
 
     def generate_and_fill_password(self, category_key):
@@ -454,12 +472,12 @@ class PasswordManagerApp:
         self.tabs[category_key]["password_var"].set(generated_password)
 
     def import_records(self, category_key):
-        """Import records into one category from JSON, CSV, or XLSX."""
+        """Import records into one category from an encrypted vault backup or tabular file."""
         file_path = filedialog.askopenfilename(
             title="Import Password Data",
             filetypes=[
-                ("Supported files", "*.json *.csv *.xlsx"),
-                ("JSON files", "*.json"),
+                ("Supported files", "*.vault *.csv *.xlsx"),
+                ("Encrypted vault files", "*.vault"),
                 ("CSV files", "*.csv"),
                 ("Excel files", "*.xlsx"),
                 ("All files", "*.*"),
@@ -485,16 +503,14 @@ class PasswordManagerApp:
             )
 
     def export_records(self, category_key):
-        """Export one category to JSON, CSV, or XLSX for backup."""
+        """Export one category to an encrypted vault backup."""
         default_name = f"{category_key}_backup"
         file_path = filedialog.asksaveasfilename(
             title="Export Password Data",
-            defaultextension=".json",
+            defaultextension=".vault",
             initialfile=default_name,
             filetypes=[
-                ("JSON files", "*.json"),
-                ("CSV files", "*.csv"),
-                ("Excel files", "*.xlsx"),
+                ("Encrypted vault files", "*.vault"),
                 ("All files", "*.*"),
             ],
         )
@@ -540,12 +556,12 @@ class PasswordManagerApp:
             )
 
     def import_all_records(self):
-        """Import all categories from one backup file."""
+        """Import all categories from an encrypted vault backup or tabular file."""
         file_path = filedialog.askopenfilename(
             title="Import Full Backup",
             filetypes=[
-                ("Supported files", "*.json *.csv *.xlsx"),
-                ("JSON files", "*.json"),
+                ("Supported files", "*.vault *.csv *.xlsx"),
+                ("Encrypted vault files", "*.vault"),
                 ("CSV files", "*.csv"),
                 ("Excel files", "*.xlsx"),
                 ("All files", "*.*"),
@@ -577,15 +593,13 @@ class PasswordManagerApp:
             )
 
     def export_all_records(self):
-        """Export all categories to one backup file."""
+        """Export all categories to one encrypted vault backup."""
         file_path = filedialog.asksaveasfilename(
             title="Export Full Backup",
-            defaultextension=".json",
+            defaultextension=".vault",
             initialfile="password_manager_full_backup",
             filetypes=[
-                ("JSON files", "*.json"),
-                ("CSV files", "*.csv"),
-                ("Excel files", "*.xlsx"),
+                ("Encrypted vault files", "*.vault"),
                 ("All files", "*.*"),
             ],
         )
@@ -810,12 +824,15 @@ class PasswordManagerApp:
 
 
 class StorageManager:
-    """Persistence facade that routes operations to PostgreSQL or JSON fallback."""
+    """Encrypted local persistence for the first, single-owner release."""
 
-    def __init__(self):
-        """Prepare backend routing and initialize storage artifacts."""
+    def __init__(self, master_password):
+        """Prepare the local vault without silently falling back to plaintext."""
         self.base_dir = BASE_DIR
-        self.json_store_path = os.path.join(self.base_dir, "json_files/password_data.json")
+        self.master_password = master_password
+        self.vault_path = os.path.join(self.base_dir, "json_files", "password_data.vault")
+        self.legacy_json_store_path = os.path.join(self.base_dir, "json_files", "password_data.json")
+        self.json_store_path = self.vault_path
         self.table_map = {
             "password_book": "password_manager",
             "mobile_devices": "password_manager_mobile_devices",
@@ -828,27 +845,14 @@ class StorageManager:
         self._initialize_storage()
 
     def _initialize_storage(self):
-        """Create required DB tables when available, otherwise enable JSON fallback."""
-        try:
-            with get_db_connection() as conn:
-                with conn.cursor() as cursor:
-                    for table_name in self.table_map.values():
-                        cursor.execute(self._create_table_sql(table_name))
-                conn.commit()
-            self.use_database = True
-            self.fallback_warning = ""
-            LOGGER.info("storage_backend_selected backend=postgresql")
-        except Exception as exc:
-            self.use_database = False
-            self.fallback_warning = (
-                "PostgreSQL is unavailable. Using local JSON fallback storage for this session. "
-                "Credentials will be saved to password_data.json."
+        """Create an encrypted vault, refusing to consume a legacy plaintext file."""
+        if os.path.exists(self.legacy_json_store_path):
+            raise VaultCryptoError(
+                "A legacy plaintext password_data.json exists. Move it aside and review it manually; "
+                "this app will not read plaintext credentials automatically."
             )
-            LOGGER.exception(
-                "storage_backend_fallback backend=json_fallback error_type=%s",
-                exc.__class__.__name__,
-            )
-            self._ensure_json_store_exists()
+        self._ensure_json_store_exists()
+        LOGGER.info("storage_backend_selected backend=encrypted_local_vault")
 
     def _create_table_sql(self, table_name):
         """Return table DDL aligned with project SQL schema naming."""
@@ -867,7 +871,7 @@ class StorageManager:
         """
 
     def _ensure_json_store_exists(self):
-        """Create fallback JSON storage file when absent."""
+        """Create or validate the encrypted local vault."""
         if not os.path.exists(self.json_store_path):
             seed = {
                 "password_book": [],
@@ -876,11 +880,12 @@ class StorageManager:
                 "admin": [],
                 "next_id": 1,
             }
-            self._save_json(seed)
+            save_encrypted_file(self.json_store_path, seed, self.master_password)
             return
 
-        with open(self.json_store_path, "r", encoding="utf-8") as file:
-            existing = json.load(file)
+        existing = load_encrypted_file(self.json_store_path, self.master_password)
+        if not isinstance(existing, dict):
+            raise VaultCryptoError("The encrypted vault payload is invalid.")
 
         changed = False
         for category_key in CATEGORY_LABELS:
@@ -892,25 +897,67 @@ class StorageManager:
             existing["next_id"] = 1
             changed = True
 
+        self._validate_json_payload(existing)
+
         if changed:
             self._save_json(existing)
 
+    def _validate_json_payload(self, payload):
+        """Validate vault records and reject duplicate or unsafe IDs."""
+        seen_ids = set()
+        max_id = 0
+        required_fields = ("employee_name", "account_name", "username", "account_password")
+
+        for category_key in CATEGORY_LABELS:
+            records = payload.get(category_key)
+            if not isinstance(records, list):
+                raise VaultCryptoError("The encrypted vault contains an invalid category.")
+
+            for record in records:
+                if not isinstance(record, dict):
+                    raise VaultCryptoError("The encrypted vault contains an invalid record.")
+                try:
+                    password_id = int(record["password_id"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise VaultCryptoError("The encrypted vault contains an invalid record ID.") from exc
+                if isinstance(record["password_id"], bool) or password_id <= 0:
+                    raise VaultCryptoError("The encrypted vault contains an invalid record ID.")
+                if password_id in seen_ids:
+                    raise VaultCryptoError(
+                        "The encrypted vault contains duplicate record IDs. Restore a clean backup."
+                    )
+                seen_ids.add(password_id)
+                max_id = max(max_id, password_id)
+                for field in required_fields:
+                    value = record.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        raise VaultCryptoError("The encrypted vault contains an invalid record.")
+
+        next_id = payload.get("next_id")
+        if isinstance(next_id, bool) or not isinstance(next_id, int) or next_id <= max_id:
+            raise VaultCryptoError("The encrypted vault has an invalid next record ID.")
+
     def _load_json(self):
-        """Load fallback JSON storage payload."""
+        """Load and decrypt the local vault payload."""
         self._ensure_json_store_exists()
-        with open(self.json_store_path, "r", encoding="utf-8") as file:
-            return json.load(file)
+        return load_encrypted_file(self.json_store_path, self.master_password)
 
     def _save_json(self, payload):
-        """Persist fallback JSON storage payload."""
-        with open(self.json_store_path, "w", encoding="utf-8") as file:
-            json.dump(payload, file, indent=2)
+        """Persist the local vault with authenticated encryption and atomic replacement."""
+        save_encrypted_file(self.json_store_path, payload, self.master_password)
 
     def fetch_records(self, category_key, search_filters=None):
         """Fetch records by category, optionally filtered by supported text fields."""
         if self.use_database:
             return self._db_fetch_records(category_key, search_filters)
         return self._json_fetch_records(category_key, search_filters)
+
+    def fetch_record(self, category_key, password_id):
+        """Fetch one record only after the encrypted vault has been unlocked."""
+        for record in self.fetch_records(category_key):
+            if int(record.get("password_id")) == int(password_id):
+                return record
+        return None
 
     def add_record(self, category_key, payload):
         """Add one record to selected category."""
@@ -965,17 +1012,16 @@ class StorageManager:
         )
 
     def export_records_to_file(self, category_key, file_path):
-        """Export one category to JSON, CSV, or XLSX depending on file extension."""
+        """Export one category only as an encrypted vault backup."""
         records = [self._serialize_record(row) for row in self.fetch_records(category_key)]
         ext = self._file_extension(file_path)
-
-        if ext == ".json":
-            with open(file_path, "w", encoding="utf-8") as file:
-                json.dump(records, file, indent=2)
-            return
-
-        rows = [self._row_for_tabular_export(record) for record in records]
-        self._write_tabular_file(file_path, rows, include_category=False)
+        if ext != ".vault":
+            raise ValueError("Password backups must use the encrypted .vault format.")
+        save_encrypted_file(
+            file_path,
+            {category_key: records, "exported_at": datetime.now().isoformat(timespec="seconds")},
+            self.master_password,
+        )
 
     def export_template_to_file(self, category_key, file_path):
         """Export a header-only CSV/XLSX template for one category."""
@@ -986,27 +1032,16 @@ class StorageManager:
         self._write_tabular_file(file_path, rows=[], include_category=False)
 
     def export_all_records_to_file(self, file_path):
-        """Export all categories to JSON, CSV, or XLSX depending on file extension."""
+        """Export all categories only as one encrypted vault backup."""
         ext = self._file_extension(file_path)
-
-        if ext == ".json":
-            payload = {
-                "password_book": [self._serialize_record(row) for row in self.fetch_records("password_book")],
-                "mobile_devices": [self._serialize_record(row) for row in self.fetch_records("mobile_devices")],
-                "computers": [self._serialize_record(row) for row in self.fetch_records("computers")],
-                "admin": [self._serialize_record(row) for row in self.fetch_records("admin")],
-                "exported_at": datetime.now().isoformat(timespec="seconds"),
-            }
-            with open(file_path, "w", encoding="utf-8") as file:
-                json.dump(payload, file, indent=2)
-            return
-
-        rows = []
-        for category_key in CATEGORY_LABELS:
-            for record in self.fetch_records(category_key):
-                rows.append(self._row_for_tabular_export(record, category_key=category_key))
-
-        self._write_tabular_file(file_path, rows, include_category=True)
+        if ext != ".vault":
+            raise ValueError("Password backups must use the encrypted .vault format.")
+        payload = {
+            category_key: [self._serialize_record(row) for row in self.fetch_records(category_key)]
+            for category_key in CATEGORY_LABELS
+        }
+        payload["exported_at"] = datetime.now().isoformat(timespec="seconds")
+        save_encrypted_file(file_path, payload, self.master_password)
 
     def export_all_template_to_file(self, file_path):
         """Export a header-only CSV/XLSX template for full category imports."""
@@ -1016,11 +1051,10 @@ class StorageManager:
         self._write_tabular_file(file_path, rows=[], include_category=True)
 
     def import_records_from_file(self, category_key, file_path):
-        """Import one category from JSON, CSV, or XLSX."""
+        """Import one category from an encrypted vault backup or tabular file."""
         ext = self._file_extension(file_path)
-        if ext == ".json":
-            with open(file_path, "r", encoding="utf-8") as file:
-                payload = json.load(file)
+        if ext == ".vault":
+            payload = load_encrypted_file(file_path, self.master_password)
 
             if isinstance(payload, list):
                 records = payload
@@ -1030,52 +1064,114 @@ class StorageManager:
                 records = payload["records"]
             else:
                 raise ValueError("Import JSON must be a record list or include the selected category key.")
-            return self._import_records(category_key, records)
+            self._validate_import_record_ids(records)
+            return self._import_records(category_key, records, enforce_category=True)
+
+        if ext == ".json":
+            raise ValueError("Plaintext JSON imports are disabled. Use an encrypted .vault backup.")
 
         rows = self._read_tabular_file(file_path)
-        return self._import_records(category_key, rows)
+        self._validate_import_record_ids(rows)
+        return self._import_records(category_key, rows, enforce_category=True)
 
     def import_all_records_from_file(self, file_path):
-        """Import all categories from JSON, CSV, or XLSX backup."""
+        """Import all categories from an encrypted vault backup or tabular file."""
         ext = self._file_extension(file_path)
         summary = {category_key: 0 for category_key in CATEGORY_LABELS}
 
-        if ext == ".json":
-            with open(file_path, "r", encoding="utf-8") as file:
-                payload = json.load(file)
+        if ext == ".vault":
+            payload = load_encrypted_file(file_path, self.master_password)
 
             if isinstance(payload, dict):
+                if isinstance(payload.get("records"), list):
+                    self._validate_full_import_categories(payload["records"])
+                    self._validate_import_record_ids(payload["records"])
+                    grouped_rows = self._group_rows_by_category(payload["records"])
+                    for category_key in CATEGORY_LABELS:
+                        imported, _skipped = self._import_records(
+                            category_key, grouped_rows[category_key], enforce_category=True
+                        )
+                        summary[category_key] = imported
+                    return summary
+
+                category_keys_present = [
+                    category_key for category_key in CATEGORY_LABELS if category_key in payload
+                ]
+                if not category_keys_present:
+                    if "records" in payload:
+                        raise ValueError("Full import records must be a list.")
+                    raise ValueError(
+                        "Encrypted vault does not contain any recognized password categories "
+                        "or a records list."
+                    )
+
+                all_records = []
+                for category_key in CATEGORY_LABELS:
+                    if category_key not in payload:
+                        continue
+                    records = payload[category_key]
+                    if not isinstance(records, list):
+                        raise ValueError("Full import category values must be lists.")
+                    all_records.extend(records)
+                self._validate_import_record_ids(all_records)
+
                 for category_key in CATEGORY_LABELS:
                     records = payload.get(category_key, [])
-                    if not isinstance(records, list):
-                        records = []
-                    imported, _skipped = self._import_records(category_key, records)
+                    if category_key in payload and not isinstance(records, list):
+                        raise ValueError("Full import category values must be lists.")
+                    self._validate_import_record_ids(records)
+                    imported, _skipped = self._import_records(
+                        category_key, records, enforce_category=True
+                    )
                     summary[category_key] = imported
                 return summary
 
             if isinstance(payload, list):
+                self._validate_full_import_categories(payload)
+                self._validate_import_record_ids(payload)
                 grouped_rows = self._group_rows_by_category(payload)
                 for category_key in CATEGORY_LABELS:
-                    imported, _skipped = self._import_records(category_key, grouped_rows[category_key])
+                    imported, _skipped = self._import_records(
+                        category_key, grouped_rows[category_key], enforce_category=True
+                    )
                     summary[category_key] = imported
                 return summary
 
-            raise ValueError("Unsupported JSON structure for full import.")
+            raise ValueError("Unsupported encrypted vault structure for full import.")
+
+        if ext == ".json":
+            raise ValueError("Plaintext JSON imports are disabled. Use an encrypted .vault backup.")
 
         rows = self._read_tabular_file(file_path)
+        self._validate_full_import_categories(rows)
+        self._validate_import_record_ids(rows)
         grouped_rows = self._group_rows_by_category(rows)
         for category_key in CATEGORY_LABELS:
-            imported, _skipped = self._import_records(category_key, grouped_rows[category_key])
+            imported, _skipped = self._import_records(
+                category_key, grouped_rows[category_key], enforce_category=True
+            )
             summary[category_key] = imported
 
         return summary
 
-    def _import_records(self, category_key, records):
+    def _import_records(self, category_key, records, enforce_category=False):
         """Validate and import rows with upsert behavior by employee/account/username."""
+        self._validate_import_record_ids(records)
         imported = 0
         skipped = 0
 
         for row in records:
+            if enforce_category and isinstance(row, dict):
+                canonical = self._canonicalize_row_keys(row)
+                category_value = str(canonical.get("category", "")).strip().lower()
+                if category_value:
+                    category_key_by_label = {
+                        label.lower(): key for key, label in CATEGORY_LABELS.items()
+                    }
+                    row_category = category_key_by_label.get(category_value, category_value)
+                    if row_category not in CATEGORY_LABELS or row_category != category_key:
+                        skipped += 1
+                        continue
             normalized = self._normalize_import_row(row)
             if not normalized:
                 skipped += 1
@@ -1084,6 +1180,40 @@ class StorageManager:
             imported += 1
 
         return imported, skipped
+
+    def _validate_import_record_ids(self, records):
+        """Reject duplicate or malformed IDs supplied by an imported backup."""
+        seen_ids = set()
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            canonical = self._canonicalize_row_keys(row)
+            raw_id = canonical.get("password_id")
+            if raw_id in (None, ""):
+                continue
+            try:
+                password_id = int(raw_id)
+            except (TypeError, ValueError) as exc:
+                raise VaultCryptoError("The imported backup contains an invalid record ID.") from exc
+            if isinstance(raw_id, bool) or password_id <= 0:
+                raise VaultCryptoError("The imported backup contains an invalid record ID.")
+            if password_id in seen_ids:
+                raise VaultCryptoError(
+                    "The imported backup contains duplicate record IDs. Restore a clean backup."
+                )
+            seen_ids.add(password_id)
+
+    def _validate_full_import_categories(self, records):
+        """Reject full-import rows that cannot be routed to a known category."""
+        category_key_by_label = {label.lower(): key for key, label in CATEGORY_LABELS.items()}
+        for row in records:
+            if not isinstance(row, dict):
+                raise ValueError("Full imports require a valid Category for every row.")
+            canonical = self._canonicalize_row_keys(row)
+            category_value = str(canonical.get("category", "")).strip().lower()
+            row_category = category_key_by_label.get(category_value, category_value)
+            if row_category not in CATEGORY_LABELS:
+                raise ValueError("Full imports require a valid Category for every row.")
 
     def _upsert_record(self, category_key, row):
         """Insert or update a row depending on backend and uniqueness tuple."""
@@ -1319,7 +1449,17 @@ class StorageManager:
         """Delete one JSON fallback row by id."""
         data = self._load_json()
         records = data[category_key]
-        data[category_key] = [record for record in records if int(record["password_id"]) != int(password_id)]
+        matches = [
+            index for index, record in enumerate(records)
+            if int(record["password_id"]) == int(password_id)
+        ]
+        if not matches:
+            raise ValueError("The selected record no longer exists.")
+        if len(matches) > 1:
+            raise VaultCryptoError(
+                "The encrypted vault contains duplicate record IDs. Restore a clean backup."
+            )
+        del records[matches[0]]
         self._save_json(data)
 
     def _json_upsert_record(self, category_key, row):
@@ -1391,11 +1531,26 @@ class StorageManager:
 
         canonical = self._canonicalize_row_keys(row)
 
-        employee_name = str(canonical.get("employee_name", "")).strip()
-        account_name = str(canonical.get("account_name", "")).strip()
-        username = str(canonical.get("username", "")).strip()
-        account_password = str(canonical.get("account_password", "")).strip()
-        notes = str(canonical.get("notes", "")).strip()
+        employee_name = (
+            "" if canonical.get("employee_name") is None
+            else str(canonical.get("employee_name")).strip()
+        )
+        account_name = (
+            "" if canonical.get("account_name") is None
+            else str(canonical.get("account_name")).strip()
+        )
+        username = (
+            "" if canonical.get("username") is None
+            else str(canonical.get("username")).strip()
+        )
+        account_password = (
+            "" if canonical.get("account_password") is None
+            else str(canonical.get("account_password")).strip()
+        )
+        notes = (
+            "" if canonical.get("notes") is None
+            else str(canonical.get("notes")).strip()
+        )
 
         if not (employee_name and account_name and username and account_password):
             return None
@@ -1426,6 +1581,8 @@ class StorageManager:
             "created at": "created_at",
             "updated_at": "updated_at",
             "updated at": "updated_at",
+            "password_id": "password_id",
+            "password id": "password_id",
             "category": "category",
         }
 
@@ -1568,10 +1725,39 @@ class StorageManager:
 
 
 def main():
-    """Launch the password manager desktop application."""
+    """Unlock the local vault, then launch the password manager desktop application."""
     root = tk.Tk()
-    app = PasswordManagerApp(root)
+    root.withdraw()
+    vault_path = os.path.join(BASE_DIR, "json_files", "password_data.vault")
+    if os.path.exists(vault_path):
+        master_password = simpledialog.askstring(
+            "Unlock Vault", "Enter your master password:", show="*", parent=root
+        )
+        if master_password is None:
+            root.destroy()
+            return
+    else:
+        master_password = simpledialog.askstring(
+            "Create Master Password",
+            "Create a master password (12+ characters). It cannot be recovered:",
+            show="*",
+            parent=root,
+        )
+        confirmation = simpledialog.askstring(
+            "Confirm Master Password", "Enter it again:", show="*", parent=root
+        ) if master_password is not None else None
+        if master_password != confirmation:
+            messagebox.showerror("Password Mismatch", "The master passwords did not match.", parent=root)
+            root.destroy()
+            return
+    try:
+        app = PasswordManagerApp(root, master_password)
+    except VaultCryptoError as exc:
+        messagebox.showerror("Vault Locked", str(exc), parent=root)
+        root.destroy()
+        return
     _ = app
+    root.deiconify()
     root.mainloop()
 
 
