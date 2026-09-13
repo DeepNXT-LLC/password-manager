@@ -1,202 +1,86 @@
-# Password Manager (Tkinter + PostgreSQL/JSON)
+# Password Manager — encrypted local vault (Stage 1)
 
-A desktop password manager built with Python and Tkinter.
+A Windows desktop password manager built with Python and Tkinter.
 
-This application helps track account credentials across multiple categories, 
-generate secure passwords from a word list, and import/export backup data in 
-JSON, CSV, and XLSX formats.
+This private review branch changes the original prototype into a first-stage,
+single-owner vault. Password records are stored in an encrypted local `.vault`
+file protected by a master password. The master password is never saved by the
+application.
 
-## Features
+## What this stage supports
 
-- Multi-tab credential management:
-	- Password Book
-	- Mobile Devices
-	- Computers
-	- Admin
-- Full CRUD operations (Add, Update, Delete, Search)
-- Password generator (word-based + symbol + digits)
-- Optional clipboard copy support via `pyperclip`
-- Import and export support:
-	- Per-category backups
-	- Full multi-category backups
-	- Header-only template exports for CSV/XLSX imports
-- Password update reminder workflow:
-	- Tracks `updated_at`
-	- Flags records older than 90 days
-	- Displays due items in a dedicated Reminders tab
-- Storage backend auto-selection:
-	- Uses PostgreSQL when available
-	- Falls back to local JSON storage when DB connection is unavailable
+- Password Book, Mobile Devices, Computers, and Admin tabs
+- Add, update, delete, search, and 90-day update reminders
+- Passwords masked in the table and form until the owner chooses **Show**
+- Password generation using Python's cryptographically secure `secrets` module
+- Encrypted per-category and full-vault backups using AES-256-GCM and scrypt
+- CSV/XLSX header-only templates for preparing imports
+- CSV/XLSX imports as a deliberate one-time migration path
 
-## Tech Stack
+## What this stage does not claim
 
-- Python 3
-- Tkinter (GUI)
-- PostgreSQL (`psycopg2`) for primary storage
-- JSON file fallback storage
-- `openpyxl` for `.xlsx` import/export
-- `python-dotenv` for environment variable loading
+- This is not yet a multi-user team service.
+- There are no team accounts, roles, sharing rules, audit logs, or recovery
+  workflow yet.
+- PostgreSQL is intentionally not used in this stage because the original
+  PostgreSQL schema stores passwords as plaintext.
+- The application cannot protect secrets from someone who controls the Windows
+  account, machine, or process running it.
 
-## Repository Structure
+Do not call this production-ready for team use until Stage 2 has separately
+specified and verified identities, authorization, recovery, auditability,
+concurrency, deployment, and operational backup/restore.
 
-```text
-password_manager/
-├── password_manager.py              # Main GUI application
-├── password_generator.py            # Password generation utilities
-├── postgresql.py                    # PostgreSQL connection helper
-├── password_data.json               # JSON fallback data store
-├── public_config.json               # Public word list config
-├── word_list.json                   # Public word list
-├── requirements.txt
-├── LICENSE.txt
-├── README.md
-├── json_files/
-│   └── word_list.json               # Private/local word list option
-└── sql_functions/
-		└── password_manager_table.sql   # Example base table DDL
-```
+## Security rules
+
+- The master password must be at least 12 characters. If it is forgotten, the
+  application cannot recover the vault.
+- The encrypted vault is `json_files/password_data.vault`.
+- A legacy `json_files/password_data.json` is rejected. It is not silently read
+  or converted because it may contain plaintext credentials.
+- Password backups must use `.vault`. Plaintext JSON/CSV/XLSX password exports
+  are disabled.
+- Empty CSV/XLSX templates are allowed because they contain no credentials.
+- Keep vault backups private and test that they can be unlocked before relying
+  on them.
 
 ## Installation
 
-1. Create and activate a virtual environment.
-
-```bash
+```powershell
 python -m venv .venv
-```
-
-Windows (PowerShell):
-
-```bash
 .venv\Scripts\Activate.ps1
-```
-
-Windows (cmd):
-
-```bash
-.venv\Scripts\activate.bat
-```
-
-2. Install dependencies.
-
-```bash
 pip install -r requirements.txt
 ```
 
-## Configuration
+## Running
 
-### 1) Environment variables (.env)
-
-Create a `.env` file in the project root for PostgreSQL access:
-
-```env
-POSTGRESQL_HOST=host
-POSTGRESQL_PORT=port
-DATABASE=password_manager
-POSTGRESQL_USER=username
-POSTGRESQL_PASSWORD=your_password
-```
-
-If these values are missing or the database is unreachable, the app automatically 
-uses `password_data.json` for storage.
-
-### 2) Word list source
-
-Password generation uses a JSON array of words and resolves sources in this order:
-
-1. `json_files/private_config.json` -> `word_list_path` (if present)
-2. `public_config.json` -> `word_list_path`
-3. `json_files/word_list.json`
-4. `word_list.json`
-
-Example `public_config.json`:
-
-```json
-{
-	"word_list_path": "word_list.json"
-}
-```
-
-Expected word list format:
-
-```json
-["apple", "sunset", "rocket", "bridge"]
-```
-
-At least 2 valid words are required.
-
-## Database Setup (Optional but Recommended)
-
-You can let the app create required tables automatically on startup, 
-or manually run the SQL in `sql_functions/password_manager_table.sql` as a baseline.
-
-On startup, the app ensures category tables exist for:
-
-- `password_manager`
-- `password_manager_mobile_devices`
-- `password_manager_computers`
-- `password_manager_admin`
-
-Each table enforces uniqueness on:
-
-- `employee_name`
-- `account_name`
-- `username`
-
-## Running the App
-
-```bash
+```powershell
 python password_manager.py
 ```
 
-The UI opens with category tabs and a Reminders tab.
+The first run asks the owner to create a master password. Later runs ask to
+unlock the existing vault.
 
-## Import/Export Formats
+## Testing
 
-### Supported file types
+Run from this repository. The `--confcutdir=.` option prevents an unrelated
+parent-folder pytest configuration from being loaded.
 
-- `.json`
-- `.csv`
-- `.xlsx`
+```powershell
+python -m pytest -q --override-ini addopts= --confcutdir=.
+```
 
-### Canonical fields
+## Repository structure
 
-- `employee_name` / `Employee Name`
-- `account_name` / `Account Name`
-- `username` / `Username`
-- `account_password` / `Password` / `Account Password`
-- `notes` / `Notes`
-- `category` / `Category` (required for full multi-category tabular imports)
-
-### Import behavior
-
-- Required fields: employee name, account name, username, password
-- Duplicate detection key: employee + account + username
-- Existing matches are updated (upsert behavior)
-- Invalid rows are skipped and reported
-
-## Password Reminder Logic
-
-- A record is considered due when `updated_at` is older than 90 days.
-- Due records are grouped and shown in the Reminders tab.
-- A startup warning summarizes due counts by category.
-
-## Security Notes
-
-- Passwords are stored as plain text in this project (database and JSON fallback).
-- Use this project only in trusted/internal environments unless you add encryption 
-  and stronger access controls.
-- Do not commit real credentials or private `.env` values.
-
-## Troubleshooting
-
-- `psycopg2` install issues on Windows:
-	- Ensure Python and pip are up to date.
-	- If build errors occur, install PostgreSQL client tools and Visual C++ Build Tools, 
-      or use a compatible wheel.
-- `.xlsx` import/export errors:
-	- Verify `openpyxl` is installed.
-- Password generator errors:
-	- Confirm the configured word list file exists and is a JSON array of strings.
+```text
+password_manager.py                 # Tkinter UI and encrypted-vault CRUD
+password_generator.py               # secure password generation
+vault_crypto.py                     # scrypt + AES-GCM vault envelope
+tests/                              # focused security and behavior tests
+sql_functions/                      # retained source reference; not used in Stage 1
+word_list.json                      # public word list for generation
+requirements.txt
+```
 
 ## License
 

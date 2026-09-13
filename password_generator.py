@@ -1,9 +1,13 @@
-import random
+import secrets
 import string
-import pyperclip
 import json
 import os
 from json import JSONDecodeError
+
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PRIVATE_CONFIG_PATH = os.path.join(BASE_DIR, "json_files", "private_config.json")
@@ -198,7 +202,7 @@ def update_password_settings(new_settings):
 
 def _choose_words(words, count, capitalize_words=True):
     """Randomly select word tokens and optionally capitalize each one."""
-    selected_words = [random.choice(words) for _ in range(count)]
+    selected_words = [secrets.choice(words) for _ in range(count)]
     if capitalize_words:
         return [word.capitalize() for word in selected_words]
     return [word.lower() for word in selected_words]
@@ -207,8 +211,8 @@ def _choose_words(words, count, capitalize_words=True):
 def _generate_word_symbol_word_numbers(words, settings):
     """Generate password format: words with symbol separators and trailing numbers."""
     chosen_words = _choose_words(words, settings["word_count"], settings["capitalize_words"])
-    symbols = [random.choice(string.punctuation) for _ in range(settings["symbols_count"])]
-    numbers = [str(random.randint(0, 9)) for _ in range(settings["numbers_count"])]
+    symbols = [secrets.choice(string.punctuation) for _ in range(settings["symbols_count"])]
+    numbers = [str(secrets.randbelow(10)) for _ in range(settings["numbers_count"])]
 
     password = chosen_words[0]
     symbol_index = 0
@@ -237,22 +241,22 @@ def _generate_word_number_chunks(words, settings):
     segments = []
     for index, word in enumerate(chosen_words):
         chunk_size = base_chunk + (1 if index < remainder else 0)
-        digits = "".join(str(random.randint(0, 9)) for _ in range(chunk_size))
+        digits = "".join(str(secrets.randbelow(10)) for _ in range(chunk_size))
         segments.append(word + digits)
 
     if settings["symbols_count"] > 0:
-        joiner = random.choice(string.punctuation)
+        joiner = secrets.choice(string.punctuation)
         return joiner.join(segments)
     return "".join(segments)
 
 
 def _generate_scrambled(settings):
     """Generate randomized password from mixed letters, numbers, and symbols."""
-    letters = [random.choice(string.ascii_letters) for _ in range(settings["letters_count"])]
-    numbers = [str(random.randint(0, 9)) for _ in range(settings["numbers_count"])]
-    symbols = [random.choice(string.punctuation) for _ in range(settings["symbols_count"])]
+    letters = [secrets.choice(string.ascii_letters) for _ in range(settings["letters_count"])]
+    numbers = [str(secrets.randbelow(10)) for _ in range(settings["numbers_count"])]
+    symbols = [secrets.choice(string.punctuation) for _ in range(settings["symbols_count"])]
     characters = letters + numbers + symbols
-    random.shuffle(characters)
+    secrets.SystemRandom().shuffle(characters)
     return "".join(characters)
 
 def generate_password():
@@ -283,6 +287,8 @@ def generate_password():
 
 def generate_and_copy_password():
     """Generate a password and copy it to the system clipboard."""
+    if pyperclip is None:
+        raise RuntimeError("Clipboard support is unavailable. Install pyperclip to enable copying.")
     generated_password = generate_password()
     pyperclip.copy(generated_password)
     return generated_password
@@ -290,5 +296,4 @@ def generate_and_copy_password():
 
 if __name__ == "__main__":
     generated_password = generate_and_copy_password()
-    print(f"Generated password: {generated_password}")
-    print("Password has been copied to clipboard.")
+    print(f"Generated password of length {len(generated_password)} was copied to clipboard.")
