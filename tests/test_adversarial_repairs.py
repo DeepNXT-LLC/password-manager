@@ -1,7 +1,13 @@
 import pytest
 
 import password_manager as pm
-from vault_crypto import VaultCryptoError, decrypt_payload, encrypt_payload, save_encrypted_file
+from vault_crypto import (
+    VaultCryptoError,
+    decrypt_payload,
+    encrypt_payload,
+    load_encrypted_file,
+    save_encrypted_file,
+)
 
 
 MASTER = "synthetic-master-password-123"
@@ -134,7 +140,7 @@ def test_duplicate_ids_in_import_fail_before_writing(tmp_path, monkeypatch):
     assert all(manager.fetch_records(category) == [] for category in pm.CATEGORY_LABELS)
 
 
-@pytest.mark.parametrize("bad_id", [0, -1, True])
+@pytest.mark.parametrize("bad_id", [0, -1, True, 1.5, "1.0", "1"])
 def test_non_positive_or_boolean_stored_ids_fail_closed(tmp_path, monkeypatch, bad_id):
     manager = make_manager(tmp_path, monkeypatch)
     payload = {
@@ -156,6 +162,200 @@ def test_non_positive_or_boolean_stored_ids_fail_closed(tmp_path, monkeypatch, b
 
     with pytest.raises(VaultCryptoError, match="invalid record ID"):
         manager.fetch_records("password_book")
+
+
+def test_malformed_outer_vault_is_a_controlled_error(tmp_path):
+    broken = tmp_path / "truncated.vault"
+    broken.write_text('{"version": 1, "ciphertext":', encoding="utf-8")
+
+    with pytest.raises(VaultCryptoError, match="read the vault file"):
+        load_encrypted_file(str(broken), MASTER)
+
+
+def test_full_import_rejects_malformed_required_row_before_writing(tmp_path, monkeypatch):
+    manager = make_manager(tmp_path, monkeypatch)
+    backup = tmp_path / "partly-bad.vault"
+    save_encrypted_file(
+        str(backup),
+        {
+            "records": [
+                make_row("Good", "Account", "good", "synthetic-good", "Admin"),
+                make_row("Bad", "Account", "bad", None, "Mobile Devices"),
+            ]
+        },
+        MASTER,
+    )
+
+    with pytest.raises(ValueError, match="Employee Name.*Password"):
+        manager.import_all_records_from_file(str(backup))
+
+    assert all(manager.fetch_records(category) == [] for category in pm.CATEGORY_LABELS)
+
+
+def test_full_import_is_atomic_if_final_save_fails(tmp_path, monkeypatch):
+    manager = make_manager(tmp_path, monkeypatch)
+    manager.add_record(
+        "admin",
+        {
+            "employee_name": "Existing",
+            "account_name": "Account",
+            "username": "existing",
+            "account_password": "synthetic-existing",
+            "notes": "",
+        },
+    )
+    before = manager.fetch_records("admin")
+
+    backup = tmp_path / "atomic.vault"
+    save_encrypted_file(
+        str(backup),
+        {
+            "records": [
+                make_row("New One", "Account", "new-one", "synthetic-one", "Admin"),
+                make_row("New Two", "Account", "new-two", "synthetic-two", "Admin"),
+            ]
+        },
+        MASTER,
+    )
+
+    def fail_save(_payload):
+        raise OSError("synthetic disk failure")
+
+    monkeypatch.setattr(manager, "_save_json", fail_save)
+    with pytest.raises(OSError, match="synthetic disk failure"):
+        manager.import_all_records_from_file(str(backup))
+
+    monkeypatch.undo()
+    assert manager.fetch_records("admin") == before
+
+
+def test_missing_selected_record_clears_password_field(tmp_path, monkeypatch):
+    class FakeVar:
+        def __init__(self, value="stale"):
+            self.value = value
+
+        def set(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class FakeEntry:
+        def configure(self, **kwargs):
+            self.show = kwargs["show"]
+
+    class FakeTree:
+        def __init__(self):
+            self.selected = ("99",)
+
+        def selection(self):
+            return self.selected
+
+        def selection_remove(self, _selection):
+            self.selected = ()
+
+        def item(self, _selected_id, _option):
+            return ("Employee", "Account", "user", "••••••••", "")
+
+    manager = make_manager(tmp_path, monkeypatch)
+    manager.fetch_record = lambda _category, _password_id: None
+    app = object.__new__(pm.PasswordManagerApp)
+    app.storage = manager
+    app.tabs = {
+        "password_book": {
+            "employee_var": FakeVar(),
+            "account_var": FakeVar(),
+            "username_var": FakeVar(),
+            "password_var": FakeVar("old-secret"),
+            "notes_var": FakeVar(),
+            "show_password_var": FakeVar(True),
+            "password_entry": FakeEntry(),
+            "tree": FakeTree(),
+            "selected_id": "99",
+        }
+    }
+
+    app.on_tree_select("password_book")
+
+    assert app.tabs["password_book"]["selected_id"] is None
+    assert app.tabs["password_book"]["password_var"].get() == ""
+    assert app.tabs["password_book"]["password_entry"].show == "•"
+
+
+def test_empty_selection_clears_password_field(tmp_path, monkeypatch):
+    class FakeVar:
+        def __init__(self, value="old"):
+            self.value = value
+
+        def set(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class FakeEntry:
+        def configure(self, **kwargs):
+            self.show = kwargs["show"]
+
+    class FakeTree:
+        def selection(self):
+            return ()
+
+        def selection_remove(self, _selection):
+            pass
+
+    manager = make_manager(tmp_path, monkeypatch)
+    app = object.__new__(pm.PasswordManagerApp)
+    app.tabs = {
+        "password_book": {
+            "employee_var": FakeVar(),
+            "account_var": FakeVar(),
+            "username_var": FakeVar(),
+            "password_var": FakeVar("old-secret"),
+            "notes_var": FakeVar(),
+            "show_password_var": FakeVar(True),
+            "password_entry": FakeEntry(),
+            "tree": FakeTree(),
+            "selected_id": "old-id",
+        }
+    }
+
+    app.on_tree_select("password_book")
+
+    assert app.tabs["password_book"]["selected_id"] is None
+    assert app.tabs["password_book"]["password_var"].get() == ""
+    assert app.tabs["password_book"]["password_entry"].show == "•"
+
+
+def test_category_keyed_full_import_rejects_cross_category_duplicate_ids(tmp_path, monkeypatch):
+    manager = make_manager(tmp_path, monkeypatch)
+    backup = tmp_path / "duplicate-category-ids.vault"
+    save_encrypted_file(
+        str(backup),
+        {
+            "admin": [make_row("Admin", "Account", "admin", "synthetic-admin", password_id=77)],
+            "mobile_devices": [make_row("Phone", "Account", "phone", "synthetic-phone", password_id=77)],
+        },
+        MASTER,
+    )
+
+    with pytest.raises(VaultCryptoError, match="duplicate record IDs"):
+        manager.import_all_records_from_file(str(backup))
+
+
+def test_category_keyed_full_import_rejects_conflicting_row_category(tmp_path, monkeypatch):
+    manager = make_manager(tmp_path, monkeypatch)
+    backup = tmp_path / "conflicting-category.vault"
+    save_encrypted_file(
+        str(backup),
+        {
+            "admin": [make_row("Admin", "Account", "admin", "synthetic-admin", "Mobile Devices")],
+        },
+        MASTER,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        manager.import_all_records_from_file(str(backup))
 
 
 @pytest.mark.parametrize("field,bad_value", [("kdf_n", 1), ("kdf_r", 1), ("kdf_p", 2)])
