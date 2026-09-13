@@ -1035,6 +1035,8 @@ class StorageManager:
             payload = load_encrypted_file(file_path, self.master_password)
 
             if isinstance(payload, dict):
+                if not any(category_key in payload for category_key in CATEGORY_LABELS):
+                    raise ValueError("Encrypted vault does not contain any recognized password categories.")
                 for category_key in CATEGORY_LABELS:
                     records = payload.get(category_key, [])
                     if not isinstance(records, list):
