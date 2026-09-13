@@ -63,6 +63,12 @@ def decrypt_payload(envelope, master_password):
             raise VaultCryptoError("Unsupported vault format.")
         if envelope.get("kdf") != "scrypt" or envelope.get("cipher") != "AES-256-GCM":
             raise VaultCryptoError("Unsupported vault cryptography.")
+        if (
+            envelope.get("kdf_n") != SCRYPT_N
+            or envelope.get("kdf_r") != SCRYPT_R
+            or envelope.get("kdf_p") != SCRYPT_P
+        ):
+            raise VaultCryptoError("Unsupported vault KDF parameters.")
         salt = base64.b64decode(envelope["salt"], validate=True)
         nonce = base64.b64decode(envelope["nonce"], validate=True)
         ciphertext = base64.b64decode(envelope["ciphertext"], validate=True)

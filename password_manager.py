@@ -218,6 +218,8 @@ class PasswordManagerApp:
             "username_var": username_var,
             "password_var": password_var,
             "notes_var": notes_var,
+            "password_entry": password_entry,
+            "show_password_var": show_password_var,
             "tree": tree,
             "selected_id": None,
         }
@@ -269,6 +271,7 @@ class PasswordManagerApp:
 
     def load_tab_data(self, category_key, search_filters=None):
         """Populate one account tab Treeview, optionally filtered by supported fields."""
+        self.clear_fields(category_key)
         tree = self.tabs[category_key]["tree"]
         for item_id in tree.get_children():
             tree.delete(item_id)
@@ -322,6 +325,8 @@ class PasswordManagerApp:
         selected_id = selected[0]
         self.tabs[category_key]["selected_id"] = selected_id
         values = tree.item(selected_id, "values")
+        self.tabs[category_key]["show_password_var"].set(False)
+        self.tabs[category_key]["password_entry"].configure(show="•")
         try:
             record = self.storage.fetch_record(category_key, int(selected_id))
         except Exception as exc:
@@ -344,6 +349,8 @@ class PasswordManagerApp:
         self.tabs[category_key]["username_var"].set("")
         self.tabs[category_key]["password_var"].set("")
         self.tabs[category_key]["notes_var"].set("")
+        self.tabs[category_key]["show_password_var"].set(False)
+        self.tabs[category_key]["password_entry"].configure(show="•")
         self.tabs[category_key]["selected_id"] = None
 
         tree = self.tabs[category_key]["tree"]
@@ -877,6 +884,8 @@ class StorageManager:
             return
 
         existing = load_encrypted_file(self.json_store_path, self.master_password)
+        if not isinstance(existing, dict):
+            raise VaultCryptoError("The encrypted vault payload is invalid.")
 
         changed = False
         for category_key in CATEGORY_LABELS:
@@ -888,8 +897,45 @@ class StorageManager:
             existing["next_id"] = 1
             changed = True
 
+        self._validate_json_payload(existing)
+
         if changed:
             self._save_json(existing)
+
+    def _validate_json_payload(self, payload):
+        """Validate vault records and reject duplicate or unsafe IDs."""
+        seen_ids = set()
+        max_id = 0
+        required_fields = ("employee_name", "account_name", "username", "account_password")
+
+        for category_key in CATEGORY_LABELS:
+            records = payload.get(category_key)
+            if not isinstance(records, list):
+                raise VaultCryptoError("The encrypted vault contains an invalid category.")
+
+            for record in records:
+                if not isinstance(record, dict):
+                    raise VaultCryptoError("The encrypted vault contains an invalid record.")
+                try:
+                    password_id = int(record["password_id"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise VaultCryptoError("The encrypted vault contains an invalid record ID.") from exc
+                if isinstance(record["password_id"], bool) or password_id <= 0:
+                    raise VaultCryptoError("The encrypted vault contains an invalid record ID.")
+                if password_id in seen_ids:
+                    raise VaultCryptoError(
+                        "The encrypted vault contains duplicate record IDs. Restore a clean backup."
+                    )
+                seen_ids.add(password_id)
+                max_id = max(max_id, password_id)
+                for field in required_fields:
+                    value = record.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        raise VaultCryptoError("The encrypted vault contains an invalid record.")
+
+        next_id = payload.get("next_id")
+        if isinstance(next_id, bool) or not isinstance(next_id, int) or next_id <= max_id:
+            raise VaultCryptoError("The encrypted vault has an invalid next record ID.")
 
     def _load_json(self):
         """Load and decrypt the local vault payload."""
@@ -1018,13 +1064,15 @@ class StorageManager:
                 records = payload["records"]
             else:
                 raise ValueError("Import JSON must be a record list or include the selected category key.")
-            return self._import_records(category_key, records)
+            self._validate_import_record_ids(records)
+            return self._import_records(category_key, records, enforce_category=True)
 
         if ext == ".json":
             raise ValueError("Plaintext JSON imports are disabled. Use an encrypted .vault backup.")
 
         rows = self._read_tabular_file(file_path)
-        return self._import_records(category_key, rows)
+        self._validate_import_record_ids(rows)
+        return self._import_records(category_key, rows, enforce_category=True)
 
     def import_all_records_from_file(self, file_path):
         """Import all categories from an encrypted vault backup or tabular file."""
@@ -1035,20 +1083,57 @@ class StorageManager:
             payload = load_encrypted_file(file_path, self.master_password)
 
             if isinstance(payload, dict):
-                if not any(category_key in payload for category_key in CATEGORY_LABELS):
-                    raise ValueError("Encrypted vault does not contain any recognized password categories.")
+                if isinstance(payload.get("records"), list):
+                    self._validate_full_import_categories(payload["records"])
+                    self._validate_import_record_ids(payload["records"])
+                    grouped_rows = self._group_rows_by_category(payload["records"])
+                    for category_key in CATEGORY_LABELS:
+                        imported, _skipped = self._import_records(
+                            category_key, grouped_rows[category_key], enforce_category=True
+                        )
+                        summary[category_key] = imported
+                    return summary
+
+                category_keys_present = [
+                    category_key for category_key in CATEGORY_LABELS if category_key in payload
+                ]
+                if not category_keys_present:
+                    if "records" in payload:
+                        raise ValueError("Full import records must be a list.")
+                    raise ValueError(
+                        "Encrypted vault does not contain any recognized password categories "
+                        "or a records list."
+                    )
+
+                all_records = []
+                for category_key in CATEGORY_LABELS:
+                    if category_key not in payload:
+                        continue
+                    records = payload[category_key]
+                    if not isinstance(records, list):
+                        raise ValueError("Full import category values must be lists.")
+                    all_records.extend(records)
+                self._validate_import_record_ids(all_records)
+
                 for category_key in CATEGORY_LABELS:
                     records = payload.get(category_key, [])
-                    if not isinstance(records, list):
-                        records = []
-                    imported, _skipped = self._import_records(category_key, records)
+                    if category_key in payload and not isinstance(records, list):
+                        raise ValueError("Full import category values must be lists.")
+                    self._validate_import_record_ids(records)
+                    imported, _skipped = self._import_records(
+                        category_key, records, enforce_category=True
+                    )
                     summary[category_key] = imported
                 return summary
 
             if isinstance(payload, list):
+                self._validate_full_import_categories(payload)
+                self._validate_import_record_ids(payload)
                 grouped_rows = self._group_rows_by_category(payload)
                 for category_key in CATEGORY_LABELS:
-                    imported, _skipped = self._import_records(category_key, grouped_rows[category_key])
+                    imported, _skipped = self._import_records(
+                        category_key, grouped_rows[category_key], enforce_category=True
+                    )
                     summary[category_key] = imported
                 return summary
 
@@ -1058,19 +1143,35 @@ class StorageManager:
             raise ValueError("Plaintext JSON imports are disabled. Use an encrypted .vault backup.")
 
         rows = self._read_tabular_file(file_path)
+        self._validate_full_import_categories(rows)
+        self._validate_import_record_ids(rows)
         grouped_rows = self._group_rows_by_category(rows)
         for category_key in CATEGORY_LABELS:
-            imported, _skipped = self._import_records(category_key, grouped_rows[category_key])
+            imported, _skipped = self._import_records(
+                category_key, grouped_rows[category_key], enforce_category=True
+            )
             summary[category_key] = imported
 
         return summary
 
-    def _import_records(self, category_key, records):
+    def _import_records(self, category_key, records, enforce_category=False):
         """Validate and import rows with upsert behavior by employee/account/username."""
+        self._validate_import_record_ids(records)
         imported = 0
         skipped = 0
 
         for row in records:
+            if enforce_category and isinstance(row, dict):
+                canonical = self._canonicalize_row_keys(row)
+                category_value = str(canonical.get("category", "")).strip().lower()
+                if category_value:
+                    category_key_by_label = {
+                        label.lower(): key for key, label in CATEGORY_LABELS.items()
+                    }
+                    row_category = category_key_by_label.get(category_value, category_value)
+                    if row_category not in CATEGORY_LABELS or row_category != category_key:
+                        skipped += 1
+                        continue
             normalized = self._normalize_import_row(row)
             if not normalized:
                 skipped += 1
@@ -1079,6 +1180,40 @@ class StorageManager:
             imported += 1
 
         return imported, skipped
+
+    def _validate_import_record_ids(self, records):
+        """Reject duplicate or malformed IDs supplied by an imported backup."""
+        seen_ids = set()
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            canonical = self._canonicalize_row_keys(row)
+            raw_id = canonical.get("password_id")
+            if raw_id in (None, ""):
+                continue
+            try:
+                password_id = int(raw_id)
+            except (TypeError, ValueError) as exc:
+                raise VaultCryptoError("The imported backup contains an invalid record ID.") from exc
+            if isinstance(raw_id, bool) or password_id <= 0:
+                raise VaultCryptoError("The imported backup contains an invalid record ID.")
+            if password_id in seen_ids:
+                raise VaultCryptoError(
+                    "The imported backup contains duplicate record IDs. Restore a clean backup."
+                )
+            seen_ids.add(password_id)
+
+    def _validate_full_import_categories(self, records):
+        """Reject full-import rows that cannot be routed to a known category."""
+        category_key_by_label = {label.lower(): key for key, label in CATEGORY_LABELS.items()}
+        for row in records:
+            if not isinstance(row, dict):
+                raise ValueError("Full imports require a valid Category for every row.")
+            canonical = self._canonicalize_row_keys(row)
+            category_value = str(canonical.get("category", "")).strip().lower()
+            row_category = category_key_by_label.get(category_value, category_value)
+            if row_category not in CATEGORY_LABELS:
+                raise ValueError("Full imports require a valid Category for every row.")
 
     def _upsert_record(self, category_key, row):
         """Insert or update a row depending on backend and uniqueness tuple."""
@@ -1314,7 +1449,17 @@ class StorageManager:
         """Delete one JSON fallback row by id."""
         data = self._load_json()
         records = data[category_key]
-        data[category_key] = [record for record in records if int(record["password_id"]) != int(password_id)]
+        matches = [
+            index for index, record in enumerate(records)
+            if int(record["password_id"]) == int(password_id)
+        ]
+        if not matches:
+            raise ValueError("The selected record no longer exists.")
+        if len(matches) > 1:
+            raise VaultCryptoError(
+                "The encrypted vault contains duplicate record IDs. Restore a clean backup."
+            )
+        del records[matches[0]]
         self._save_json(data)
 
     def _json_upsert_record(self, category_key, row):
@@ -1386,11 +1531,26 @@ class StorageManager:
 
         canonical = self._canonicalize_row_keys(row)
 
-        employee_name = str(canonical.get("employee_name", "")).strip()
-        account_name = str(canonical.get("account_name", "")).strip()
-        username = str(canonical.get("username", "")).strip()
-        account_password = str(canonical.get("account_password", "")).strip()
-        notes = str(canonical.get("notes", "")).strip()
+        employee_name = (
+            "" if canonical.get("employee_name") is None
+            else str(canonical.get("employee_name")).strip()
+        )
+        account_name = (
+            "" if canonical.get("account_name") is None
+            else str(canonical.get("account_name")).strip()
+        )
+        username = (
+            "" if canonical.get("username") is None
+            else str(canonical.get("username")).strip()
+        )
+        account_password = (
+            "" if canonical.get("account_password") is None
+            else str(canonical.get("account_password")).strip()
+        )
+        notes = (
+            "" if canonical.get("notes") is None
+            else str(canonical.get("notes")).strip()
+        )
 
         if not (employee_name and account_name and username and account_password):
             return None
@@ -1421,6 +1581,8 @@ class StorageManager:
             "created at": "created_at",
             "updated_at": "updated_at",
             "updated at": "updated_at",
+            "password_id": "password_id",
+            "password id": "password_id",
             "category": "category",
         }
 
