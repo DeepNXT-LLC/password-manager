@@ -2,6 +2,7 @@ import csv
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -320,7 +321,7 @@ class PasswordManagerApp:
         tree = self.tabs[category_key]["tree"]
         selected = tree.selection()
         if not selected:
-            self.tabs[category_key]["selected_id"] = None
+            self.clear_fields(category_key)
             return
 
         selected_id = selected[0]
@@ -332,9 +333,10 @@ class PasswordManagerApp:
             record = self.storage.fetch_record(category_key, int(selected_id))
         except Exception as exc:
             self.handle_ui_exception("Load Error", "Unable to load the selected record.", "select_record", exc)
+            self.clear_fields(category_key)
             return
         if not record:
-            self.tabs[category_key]["selected_id"] = None
+            self.clear_fields(category_key)
             return
 
         self.tabs[category_key]["employee_var"].set(values[0])
@@ -917,12 +919,10 @@ class StorageManager:
             for record in records:
                 if not isinstance(record, dict):
                     raise VaultCryptoError("The encrypted vault contains an invalid record.")
-                try:
-                    password_id = int(record["password_id"])
-                except (KeyError, TypeError, ValueError) as exc:
-                    raise VaultCryptoError("The encrypted vault contains an invalid record ID.") from exc
-                if isinstance(record["password_id"], bool) or password_id <= 0:
+                raw_id = record.get("password_id")
+                if type(raw_id) is not int or raw_id <= 0:
                     raise VaultCryptoError("The encrypted vault contains an invalid record ID.")
+                password_id = raw_id
                 if password_id in seen_ids:
                     raise VaultCryptoError(
                         "The encrypted vault contains duplicate record IDs. Restore a clean backup."
@@ -1078,22 +1078,13 @@ class StorageManager:
     def import_all_records_from_file(self, file_path):
         """Import all categories from an encrypted vault backup or tabular file."""
         ext = self._file_extension(file_path)
-        summary = {category_key: 0 for category_key in CATEGORY_LABELS}
 
         if ext == ".vault":
             payload = load_encrypted_file(file_path, self.master_password)
 
             if isinstance(payload, dict):
                 if isinstance(payload.get("records"), list):
-                    self._validate_full_import_categories(payload["records"])
-                    self._validate_import_record_ids(payload["records"])
-                    grouped_rows = self._group_rows_by_category(payload["records"])
-                    for category_key in CATEGORY_LABELS:
-                        imported, _skipped = self._import_records(
-                            category_key, grouped_rows[category_key], enforce_category=True
-                        )
-                        summary[category_key] = imported
-                    return summary
+                    return self._import_full_rows(payload["records"], require_category=True)
 
                 category_keys_present = [
                     category_key for category_key in CATEGORY_LABELS if category_key in payload
@@ -1106,37 +1097,16 @@ class StorageManager:
                         "or a records list."
                     )
 
-                all_records = []
                 for category_key in CATEGORY_LABELS:
                     if category_key not in payload:
                         continue
                     records = payload[category_key]
                     if not isinstance(records, list):
                         raise ValueError("Full import category values must be lists.")
-                    all_records.extend(records)
-                self._validate_import_record_ids(all_records)
-
-                for category_key in CATEGORY_LABELS:
-                    records = payload.get(category_key, [])
-                    if category_key in payload and not isinstance(records, list):
-                        raise ValueError("Full import category values must be lists.")
-                    self._validate_import_record_ids(records)
-                    imported, _skipped = self._import_records(
-                        category_key, records, enforce_category=True
-                    )
-                    summary[category_key] = imported
-                return summary
+                return self._import_full_category_payload(payload)
 
             if isinstance(payload, list):
-                self._validate_full_import_categories(payload)
-                self._validate_import_record_ids(payload)
-                grouped_rows = self._group_rows_by_category(payload)
-                for category_key in CATEGORY_LABELS:
-                    imported, _skipped = self._import_records(
-                        category_key, grouped_rows[category_key], enforce_category=True
-                    )
-                    summary[category_key] = imported
-                return summary
+                return self._import_full_rows(payload, require_category=True)
 
             raise ValueError("Unsupported encrypted vault structure for full import.")
 
@@ -1144,15 +1114,71 @@ class StorageManager:
             raise ValueError("Plaintext JSON imports are disabled. Use an encrypted .vault backup.")
 
         rows = self._read_tabular_file(file_path)
-        self._validate_full_import_categories(rows)
-        self._validate_import_record_ids(rows)
-        grouped_rows = self._group_rows_by_category(rows)
-        for category_key in CATEGORY_LABELS:
-            imported, _skipped = self._import_records(
-                category_key, grouped_rows[category_key], enforce_category=True
-            )
-            summary[category_key] = imported
+        return self._import_full_rows(rows, require_category=True)
 
+    def _import_full_category_payload(self, payload):
+        """Validate and atomically import a category-keyed backup payload."""
+        grouped_rows = {category_key: [] for category_key in CATEGORY_LABELS}
+        seen_ids = set()
+        for category_key in CATEGORY_LABELS:
+            records = payload.get(category_key, [])
+            if not isinstance(records, list):
+                raise ValueError("Full import category values must be lists.")
+            self._validate_import_rows(
+                records,
+                require_category=False,
+                expected_category=category_key,
+                seen_ids=seen_ids,
+            )
+            grouped_rows[category_key] = records
+        return self._import_grouped_rows_atomically(grouped_rows)
+
+    def _import_full_rows(self, rows, require_category):
+        """Validate every full-import row before changing storage, then import once."""
+        self._validate_import_rows(rows, require_category=require_category)
+        grouped_rows = self._group_rows_by_category(rows)
+        return self._import_grouped_rows_atomically(grouped_rows)
+
+    def _validate_import_rows(self, records, require_category, expected_category=None, seen_ids=None):
+        """Reject malformed full-import rows before any record can be written."""
+        self._validate_import_record_ids(records, seen_ids=seen_ids)
+        category_key_by_label = {label.lower(): key for key, label in CATEGORY_LABELS.items()}
+        for row in records:
+            if not isinstance(row, dict):
+                raise ValueError("Full imports require valid records with all required fields.")
+            canonical = self._canonicalize_row_keys(row)
+            if require_category:
+                category_value = str(canonical.get("category", "")).strip().lower()
+                row_category = category_key_by_label.get(category_value, category_value)
+                if row_category not in CATEGORY_LABELS:
+                    raise ValueError("Full imports require a valid Category for every row.")
+            elif expected_category and canonical.get("category") not in (None, ""):
+                category_value = str(canonical.get("category", "")).strip().lower()
+                row_category = category_key_by_label.get(category_value, category_value)
+                if row_category != expected_category:
+                    raise ValueError("A category-keyed import row does not match its category.")
+            if self._normalize_import_row(row) is None:
+                raise ValueError("Full imports require Employee Name, Account Name, Username, and Password.")
+
+    def _import_grouped_rows_atomically(self, grouped_rows):
+        """Apply a validated local-vault import in memory and persist it with one save."""
+        if self.use_database:
+            summary = {category_key: 0 for category_key in CATEGORY_LABELS}
+            for category_key, records in grouped_rows.items():
+                imported, _skipped = self._import_records(
+                    category_key, records, enforce_category=True
+                )
+                summary[category_key] = imported
+            return summary
+
+        data = self._load_json()
+        summary = {category_key: 0 for category_key in CATEGORY_LABELS}
+        for category_key, records in grouped_rows.items():
+            for row in records:
+                normalized = self._normalize_import_row(row)
+                self._json_upsert_record_in_data(data, category_key, normalized)
+                summary[category_key] += 1
+        self._save_json(data)
         return summary
 
     def _import_records(self, category_key, records, enforce_category=False):
@@ -1182,9 +1208,9 @@ class StorageManager:
 
         return imported, skipped
 
-    def _validate_import_record_ids(self, records):
+    def _validate_import_record_ids(self, records, seen_ids=None):
         """Reject duplicate or malformed IDs supplied by an imported backup."""
-        seen_ids = set()
+        seen_ids = seen_ids if seen_ids is not None else set()
         for row in records:
             if not isinstance(row, dict):
                 continue
@@ -1192,11 +1218,20 @@ class StorageManager:
             raw_id = canonical.get("password_id")
             if raw_id in (None, ""):
                 continue
-            try:
-                password_id = int(raw_id)
-            except (TypeError, ValueError) as exc:
-                raise VaultCryptoError("The imported backup contains an invalid record ID.") from exc
-            if isinstance(raw_id, bool) or password_id <= 0:
+            if isinstance(raw_id, bool):
+                raise VaultCryptoError("The imported backup contains an invalid record ID.")
+            if type(raw_id) is int:
+                password_id = raw_id
+            elif isinstance(raw_id, str) and re.fullmatch(r"[1-9][0-9]*", raw_id.strip()):
+                try:
+                    password_id = int(raw_id.strip())
+                except ValueError as exc:
+                    raise VaultCryptoError(
+                        "The imported backup contains an invalid record ID."
+                    ) from exc
+            else:
+                raise VaultCryptoError("The imported backup contains an invalid record ID.")
+            if password_id <= 0:
                 raise VaultCryptoError("The imported backup contains an invalid record ID.")
             if password_id in seen_ids:
                 raise VaultCryptoError(
@@ -1466,6 +1501,11 @@ class StorageManager:
     def _json_upsert_record(self, category_key, row):
         """Upsert one JSON fallback row based on employee/account/username tuple."""
         data = self._load_json()
+        self._json_upsert_record_in_data(data, category_key, row)
+        self._save_json(data)
+
+    def _json_upsert_record_in_data(self, data, category_key, row):
+        """Upsert a row into an already-loaded payload without persisting it."""
         records = data[category_key]
 
         target = None
@@ -1484,7 +1524,6 @@ class StorageManager:
             target["updated_at"] = (
                 self._parse_record_datetime(row.get("updated_at"), row.get("created_at")) or datetime.now()
             ).isoformat(timespec="seconds")
-            self._save_json(data)
             return
 
         now = datetime.now()
@@ -1504,7 +1543,6 @@ class StorageManager:
             }
         )
         data["next_id"] += 1
-        self._save_json(data)
 
     def _json_ensure_not_duplicate(self, records, payload, exclude_id=None):
         """Enforce uniqueness tuple in JSON fallback mode."""
