@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import password_generator
+from postgresql import get_db_connection
 from vault_crypto import VaultCryptoError, load_encrypted_file, save_encrypted_file
 
 try:
