@@ -96,6 +96,17 @@ def save_encrypted_file(path, payload, master_password):
             file.flush()
             os.fsync(file.fileno())
         os.replace(temp_path, path)
+        # On platforms that support directory handles, also flush the rename.
+        # Windows may reject opening a directory; the atomic replace remains the
+        # safe fallback there and the exception is intentionally non-fatal.
+        try:
+            directory_fd = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except (AttributeError, OSError):
+            pass
     except Exception:
         try:
             os.unlink(temp_path)
@@ -106,6 +117,9 @@ def save_encrypted_file(path, payload, master_password):
 
 def load_encrypted_file(path, master_password):
     """Load and decrypt an encrypted vault file."""
-    with open(path, "r", encoding="utf-8") as file:
-        envelope = json.load(file)
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            envelope = json.load(file)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise VaultCryptoError("Unable to read the vault file. It may be damaged or incomplete.") from exc
     return decrypt_payload(envelope, master_password)
