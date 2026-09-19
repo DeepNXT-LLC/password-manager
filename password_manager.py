@@ -3,9 +3,11 @@ import json
 import logging
 import os
 import re
+import webbrowser
 from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from urllib.parse import urlparse
 
 import password_generator
 from postgresql import get_db_connection
@@ -63,6 +65,8 @@ EXPORT_HEADERS = {
     "employee_name": "Employee Name",
     "account_name": "Account Name",
     "username": "Username",
+    "phone_number": "Phone Number",
+    "website_url": "Website URL",
     "account_password": "Password",
     "notes": "Notes",
     "category": "Category",
@@ -83,6 +87,7 @@ class PasswordManagerApp:
         self.reminder_tree = None
         self.settings_vars = {}
         self.settings_status_var = tk.StringVar(value="")
+        self.reminder_description_var = tk.StringVar(value="")
 
         self.build_ui()
         self.load_all_tabs()
@@ -137,6 +142,8 @@ class PasswordManagerApp:
         employee_var = tk.StringVar()
         account_var = tk.StringVar()
         username_var = tk.StringVar()
+        phone_var = tk.StringVar()
+        website_var = tk.StringVar()
         password_var = tk.StringVar()
         notes_var = tk.StringVar()
 
@@ -149,9 +156,16 @@ class PasswordManagerApp:
         ttk.Label(form_frame, text="Username").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         ttk.Entry(form_frame, textvariable=username_var, width=30).grid(row=1, column=1, sticky="we", padx=5, pady=5)
 
-        ttk.Label(form_frame, text="Password").grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        if category_key == "mobile_devices":
+            ttk.Label(form_frame, text="Phone Number").grid(row=1, column=2, sticky="w", padx=5, pady=5)
+            ttk.Entry(form_frame, textvariable=phone_var, width=30).grid(row=1, column=3, sticky="we", padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Website URL").grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(form_frame, textvariable=website_var, width=30).grid(row=2, column=1, sticky="we", padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Password").grid(row=2, column=2, sticky="w", padx=5, pady=5)
         password_entry = ttk.Entry(form_frame, textvariable=password_var, width=30, show="•")
-        password_entry.grid(row=1, column=3, sticky="we", padx=5, pady=5)
+        password_entry.grid(row=2, column=3, sticky="we", padx=5, pady=5)
         show_password_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             form_frame,
@@ -160,10 +174,10 @@ class PasswordManagerApp:
             command=lambda entry=password_entry, flag=show_password_var: entry.configure(
                 show="" if flag.get() else "•"
             ),
-        ).grid(row=1, column=4, sticky="w", padx=5, pady=5)
+        ).grid(row=2, column=4, sticky="w", padx=5, pady=5)
 
-        ttk.Label(form_frame, text="Notes").grid(row=2, column=0, sticky="w", padx=5, pady=5)
-        ttk.Entry(form_frame, textvariable=notes_var, width=90).grid(row=2, column=1, columnspan=3, sticky="we", padx=5, pady=5)
+        ttk.Label(form_frame, text="Notes").grid(row=3, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(form_frame, textvariable=notes_var, width=90).grid(row=3, column=1, columnspan=3, sticky="we", padx=5, pady=5)
 
         for col in range(4):
             form_frame.columnconfigure(col, weight=1)
@@ -176,6 +190,7 @@ class PasswordManagerApp:
         ttk.Button(button_frame, text="Delete", command=lambda key=category_key: self.delete_record(key)).pack(side="left", padx=4)
         ttk.Button(button_frame, text="Search", command=lambda key=category_key: self.search_records(key)).pack(side="left", padx=4)
         ttk.Button(button_frame, text="Clear", command=lambda key=category_key: self.clear_fields(key)).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="Open Website", command=lambda key=category_key: self.open_website(key)).pack(side="left", padx=4)
         ttk.Button(
             button_frame,
             text="Generate Password",
@@ -192,19 +207,29 @@ class PasswordManagerApp:
         storage_type = "Encrypted local vault"
         ttk.Label(button_frame, text=f"{category_label} | Storage: {storage_type}").pack(side="right", padx=4)
 
-        columns = ("employee_name", "account_name", "username", "account_password", "notes")
+        columns = ["employee_name", "account_name", "username"]
+        if category_key == "mobile_devices":
+            columns.append("phone_number")
+        columns.extend(["website_url", "account_password", "notes"])
+        columns = tuple(columns)
         tree = ttk.Treeview(container, columns=columns, show="headings", height=16)
         tree.heading("employee_name", text="Employee Name")
         tree.heading("account_name", text="Account Name")
         tree.heading("username", text="Username")
+        if category_key == "mobile_devices":
+            tree.heading("phone_number", text="Phone Number")
+        tree.heading("website_url", text="Website URL")
         tree.heading("account_password", text="Password")
         tree.heading("notes", text="Notes")
 
         tree.column("employee_name", width=220, anchor="w")
         tree.column("account_name", width=220, anchor="w")
-        tree.column("username", width=220, anchor="w")
-        tree.column("account_password", width=220, anchor="w")
-        tree.column("notes", width=360, anchor="w")
+        tree.column("username", width=180, anchor="w")
+        if category_key == "mobile_devices":
+            tree.column("phone_number", width=160, anchor="w")
+        tree.column("website_url", width=240, anchor="w")
+        tree.column("account_password", width=170, anchor="w")
+        tree.column("notes", width=300, anchor="w")
 
         y_scroll = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=y_scroll.set)
@@ -218,6 +243,8 @@ class PasswordManagerApp:
             "employee_var": employee_var,
             "account_var": account_var,
             "username_var": username_var,
+            "phone_var": phone_var,
+            "website_var": website_var,
             "password_var": password_var,
             "notes_var": notes_var,
             "password_entry": password_entry,
@@ -236,7 +263,7 @@ class PasswordManagerApp:
 
         ttk.Label(
             top_bar,
-            text="Passwords listed below are overdue for update (90+ days since last update).",
+            textvariable=self.reminder_description_var,
         ).pack(side="left", padx=4)
 
         ttk.Button(top_bar, text="Refresh", command=self.refresh_reminder_tab).pack(side="right", padx=4)
@@ -280,17 +307,23 @@ class PasswordManagerApp:
 
         records = self.storage.fetch_records(category_key, search_filters=search_filters)
         for row in records:
+            row_values = [
+                row["employee_name"],
+                row["account_name"],
+                row["username"],
+            ]
+            if category_key == "mobile_devices":
+                row_values.append(row.get("phone_number") or "")
+            row_values.extend([
+                row.get("website_url") or "",
+                "••••••••",
+                row.get("notes") or "",
+            ])
             tree.insert(
                 "",
                 "end",
                 iid=str(row["password_id"]),
-                values=(
-                    row["employee_name"],
-                    row["account_name"],
-                    row["username"],
-                    "••••••••",
-                    row.get("notes") or "",
-                ),
+                values=tuple(row_values),
             )
 
     def refresh_reminder_tab(self):
@@ -301,7 +334,12 @@ class PasswordManagerApp:
         for item_id in self.reminder_tree.get_children():
             self.reminder_tree.delete(item_id)
 
-        due_records = self.storage.fetch_all_due_password_reminders(days=90)
+        reminder_days = self.get_password_reminder_days()
+        self._update_reminder_description(reminder_days)
+        if reminder_days is None:
+            return
+
+        due_records = self.storage.fetch_all_due_password_reminders(days=reminder_days)
         for record in due_records:
             self.reminder_tree.insert(
                 "",
@@ -326,7 +364,6 @@ class PasswordManagerApp:
 
         selected_id = selected[0]
         self.tabs[category_key]["selected_id"] = selected_id
-        values = tree.item(selected_id, "values")
         self.tabs[category_key]["show_password_var"].set(False)
         self.tabs[category_key]["password_entry"].configure(show="•")
         try:
@@ -339,17 +376,25 @@ class PasswordManagerApp:
             self.clear_fields(category_key)
             return
 
-        self.tabs[category_key]["employee_var"].set(values[0])
-        self.tabs[category_key]["account_var"].set(values[1])
-        self.tabs[category_key]["username_var"].set(values[2])
+        self.tabs[category_key]["employee_var"].set(record.get("employee_name", ""))
+        self.tabs[category_key]["account_var"].set(record.get("account_name", ""))
+        self.tabs[category_key]["username_var"].set(record.get("username", ""))
+        if "phone_var" in self.tabs[category_key]:
+            self.tabs[category_key]["phone_var"].set(record.get("phone_number", "") or "")
+        if "website_var" in self.tabs[category_key]:
+            self.tabs[category_key]["website_var"].set(record.get("website_url", "") or "")
         self.tabs[category_key]["password_var"].set(record["account_password"])
-        self.tabs[category_key]["notes_var"].set(values[4])
+        self.tabs[category_key]["notes_var"].set(record.get("notes", "") or "")
 
     def clear_fields(self, category_key):
         """Clear form fields and row selection for one tab."""
         self.tabs[category_key]["employee_var"].set("")
         self.tabs[category_key]["account_var"].set("")
         self.tabs[category_key]["username_var"].set("")
+        if "phone_var" in self.tabs[category_key]:
+            self.tabs[category_key]["phone_var"].set("")
+        if "website_var" in self.tabs[category_key]:
+            self.tabs[category_key]["website_var"].set("")
         self.tabs[category_key]["password_var"].set("")
         self.tabs[category_key]["notes_var"].set("")
         self.tabs[category_key]["show_password_var"].set(False)
@@ -364,6 +409,12 @@ class PasswordManagerApp:
         employee_name = self.tabs[category_key]["employee_var"].get().strip()
         account_name = self.tabs[category_key]["account_var"].get().strip()
         username = self.tabs[category_key]["username_var"].get().strip()
+        phone_number = ""
+        if "phone_var" in self.tabs[category_key]:
+            phone_number = self.tabs[category_key]["phone_var"].get().strip()
+        website_url = ""
+        if "website_var" in self.tabs[category_key]:
+            website_url = self.tabs[category_key]["website_var"].get().strip()
         account_password = self.tabs[category_key]["password_var"].get().strip()
         notes = self.tabs[category_key]["notes_var"].get().strip()
 
@@ -371,9 +422,39 @@ class PasswordManagerApp:
             "employee_name": employee_name,
             "account_name": account_name,
             "username": username,
+            "phone_number": phone_number,
+            "website_url": website_url,
             "account_password": account_password,
             "notes": notes,
         }
+
+    def open_website(self, category_key):
+        """Open the current Website URL value in the default browser."""
+        website_url = ""
+        if "website_var" in self.tabs[category_key]:
+            website_url = self.tabs[category_key]["website_var"].get().strip()
+        if not website_url:
+            messagebox.showwarning("Website URL Required", "Enter or select a Website URL to open.")
+            return
+
+        candidate_url = website_url
+        if "//" not in candidate_url:
+            candidate_url = f"https://{candidate_url}"
+
+        parsed = urlparse(candidate_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            messagebox.showwarning("Invalid URL", "Enter a valid website URL, such as example.com.")
+            return
+
+        try:
+            webbrowser.open(candidate_url)
+        except Exception as exc:
+            self.handle_ui_exception(
+                "Open Website Error",
+                "Unable to open the selected website.",
+                "open_website",
+                exc,
+            )
 
     def add_record(self, category_key):
         """Add a new record from the current form values."""
@@ -456,6 +537,10 @@ class PasswordManagerApp:
             "account_name": self.tabs[category_key]["account_var"].get().strip(),
             "username": self.tabs[category_key]["username_var"].get().strip(),
         }
+        if "phone_var" in self.tabs[category_key]:
+            search_filters["phone_number"] = self.tabs[category_key]["phone_var"].get().strip()
+        if "website_var" in self.tabs[category_key]:
+            search_filters["website_url"] = self.tabs[category_key]["website_var"].get().strip()
         self.clear_fields(category_key)
         self.load_tab_data(category_key, search_filters=search_filters)
 
@@ -660,7 +745,11 @@ class PasswordManagerApp:
 
     def check_password_reminders(self):
         """Show a startup popup summary for overdue password updates."""
-        due_records = self.storage.fetch_all_due_password_reminders(days=90)
+        reminder_days = self.get_password_reminder_days()
+        if reminder_days is None:
+            return
+
+        due_records = self.storage.fetch_all_due_password_reminders(days=reminder_days)
         if not due_records:
             return
 
@@ -672,7 +761,29 @@ class PasswordManagerApp:
 
         messagebox.showwarning(
             "Password Update Reminder",
-            "Passwords due for update (90+ days):\n" + "\n".join(summary_lines),
+            f"Passwords due for update ({reminder_days}+ days):\n" + "\n".join(summary_lines),
+        )
+
+    def get_password_reminder_days(self):
+        """Return reminder threshold as days, or None when reminders are disabled."""
+        settings = password_generator.get_password_settings()
+        reminder_setting = settings.get("reminder_days", 90)
+        if isinstance(reminder_setting, str) and reminder_setting.lower() == "off":
+            return None
+        try:
+            return int(reminder_setting)
+        except (TypeError, ValueError):
+            return 90
+
+    def _update_reminder_description(self, reminder_days):
+        """Update reminder-tab helper text based on configured threshold."""
+        if reminder_days is None:
+            self.reminder_description_var.set(
+                "Password reminders are disabled in Settings (Reminder Days: Off)."
+            )
+            return
+        self.reminder_description_var.set(
+            f"Passwords listed below are overdue for update ({reminder_days}+ days since last update)."
         )
 
     def build_settings_tab(self, parent):
@@ -689,6 +800,7 @@ class PasswordManagerApp:
             "numbers_count": tk.StringVar(value="2"),
             "symbols_count": tk.StringVar(value="1"),
             "letters_count": tk.StringVar(value="12"),
+            "reminder_days": tk.StringVar(value="90"),
             "capitalize_words": tk.BooleanVar(value=True),
         }
 
@@ -726,13 +838,23 @@ class PasswordManagerApp:
         )
         self.capitalize_check.grid(row=5, column=0, columnspan=2, sticky="w", padx=5, pady=(8, 5))
 
+        ttk.Label(form, text="Reminder Days").grid(row=6, column=0, sticky="w", padx=5, pady=5)
+        reminder_combo = ttk.Combobox(
+            form,
+            textvariable=self.settings_vars["reminder_days"],
+            state="readonly",
+            values=("30", "60", "90", "Off"),
+            width=12,
+        )
+        reminder_combo.grid(row=6, column=1, sticky="w", padx=5, pady=5)
+
         help_text = (
             "Format examples:\n"
             "- word_symbol_word_numbers: Word;Word75\n"
             "- word_number_chunks: Word76Word64word23\n"
             "- scrambled: wd}o75(rrod$w8"
         )
-        ttk.Label(form, text=help_text, justify="left").grid(row=6, column=0, columnspan=2, sticky="w", padx=5, pady=(8, 0))
+        ttk.Label(form, text=help_text, justify="left").grid(row=7, column=0, columnspan=2, sticky="w", padx=5, pady=(8, 0))
 
         button_bar = ttk.Frame(container)
         button_bar.pack(fill="x", pady=(4, 6))
@@ -768,12 +890,17 @@ class PasswordManagerApp:
         self.settings_vars["symbols_count"].set(str(settings["symbols_count"]))
         self.settings_vars["letters_count"].set(str(settings["letters_count"]))
         self.settings_vars["capitalize_words"].set(bool(settings["capitalize_words"]))
+        reminder_days = settings.get("reminder_days", 90)
+        self.settings_vars["reminder_days"].set(
+            "Off" if str(reminder_days).lower() == "off" else str(reminder_days)
+        )
         self.settings_status_var.set("Settings loaded")
         self._toggle_settings_fields()
 
     def save_settings_from_form(self):
         """Validate and persist generator settings from the UI form."""
         try:
+            reminder_raw = self.settings_vars["reminder_days"].get().strip()
             payload = {
                 "format": self.settings_vars["format"].get(),
                 "word_count": int(self.settings_vars["word_count"].get().strip()),
@@ -781,9 +908,13 @@ class PasswordManagerApp:
                 "symbols_count": int(self.settings_vars["symbols_count"].get().strip()),
                 "letters_count": int(self.settings_vars["letters_count"].get().strip()),
                 "capitalize_words": bool(self.settings_vars["capitalize_words"].get()),
+                "reminder_days": "off" if reminder_raw.lower() == "off" else int(reminder_raw),
             }
         except ValueError:
-            messagebox.showerror("Invalid Settings", "Word, number, symbol, and letter counts must be integers.")
+            messagebox.showerror(
+                "Invalid Settings",
+                "Word, number, symbol, and letter counts must be integers and reminder days must be 30, 60, 90, or Off.",
+            )
             return
 
         if payload["word_count"] <= 0:
@@ -809,6 +940,7 @@ class PasswordManagerApp:
 
         self.settings_status_var.set("Settings saved")
         self.load_settings_form()
+        self.refresh_reminder_tab()
         messagebox.showinfo("Settings Saved", f"Generator format set to: {saved['format']}")
 
     def generate_settings_preview(self):
@@ -1002,6 +1134,7 @@ class StorageManager:
                         "employee_name": record.get("employee_name", ""),
                         "account_name": record.get("account_name", ""),
                         "username": record.get("username", ""),
+                        "website_url": record.get("website_url", ""),
                         "updated_at": updated_at.strftime("%Y-%m-%d %H:%M:%S"),
                         "days_since_update": (datetime.now() - updated_at).days,
                     }
@@ -1410,18 +1543,26 @@ class StorageManager:
         employee_filter = str(search_filters.get("employee_name", "")).lower()
         account_filter = str(search_filters.get("account_name", "")).lower()
         username_filter = str(search_filters.get("username", "")).lower()
+        phone_filter = str(search_filters.get("phone_number", "")).lower()
+        website_filter = str(search_filters.get("website_url", "")).lower()
 
         filtered = []
         for record in all_records:
             employee_name = record.get("employee_name", "").lower()
             account_name = record.get("account_name", "").lower()
             username = record.get("username", "").lower()
+            phone_number = record.get("phone_number", "").lower()
+            website_url = record.get("website_url", "").lower()
 
             if employee_filter and employee_filter not in employee_name:
                 continue
             if account_filter and account_filter not in account_name:
                 continue
             if username_filter and username_filter not in username:
+                continue
+            if phone_filter and phone_filter not in phone_number:
+                continue
+            if website_filter and website_filter not in website_url:
                 continue
 
             filtered.append(record)
@@ -1447,6 +1588,8 @@ class StorageManager:
             "employee_name": payload["employee_name"],
             "account_name": payload["account_name"],
             "username": payload["username"],
+            "phone_number": payload.get("phone_number", ""),
+            "website_url": payload.get("website_url", ""),
             "account_password": payload["account_password"],
             "notes": payload["notes"],
             "created_at": now,
@@ -1475,6 +1618,8 @@ class StorageManager:
         target["employee_name"] = payload["employee_name"]
         target["account_name"] = payload["account_name"]
         target["username"] = payload["username"]
+        target["phone_number"] = payload.get("phone_number", "")
+        target["website_url"] = payload.get("website_url", "")
         target["account_password"] = payload["account_password"]
         target["notes"] = payload["notes"]
         target["updated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -1519,6 +1664,8 @@ class StorageManager:
                 break
 
         if target:
+            target["phone_number"] = row.get("phone_number", "")
+            target["website_url"] = row.get("website_url", "")
             target["account_password"] = row["account_password"]
             target["notes"] = row.get("notes", "")
             target["updated_at"] = (
@@ -1536,6 +1683,8 @@ class StorageManager:
                 "employee_name": row["employee_name"],
                 "account_name": row["account_name"],
                 "username": row["username"],
+                "phone_number": row.get("phone_number", ""),
+                "website_url": row.get("website_url", ""),
                 "account_password": row["account_password"],
                 "notes": row.get("notes", ""),
                 "created_at": created_at.isoformat(timespec="seconds"),
@@ -1590,6 +1739,14 @@ class StorageManager:
             "" if canonical.get("notes") is None
             else str(canonical.get("notes")).strip()
         )
+        phone_number = (
+            "" if canonical.get("phone_number") is None
+            else str(canonical.get("phone_number")).strip()
+        )
+        website_url = (
+            "" if canonical.get("website_url") is None
+            else str(canonical.get("website_url")).strip()
+        )
 
         if not (employee_name and account_name and username and account_password):
             return None
@@ -1598,6 +1755,8 @@ class StorageManager:
             "employee_name": employee_name,
             "account_name": account_name,
             "username": username,
+            "phone_number": phone_number,
+            "website_url": website_url,
             "account_password": account_password,
             "notes": notes,
             "created_at": canonical.get("created_at"),
@@ -1612,6 +1771,10 @@ class StorageManager:
             "account_name": "account_name",
             "account name": "account_name",
             "username": "username",
+            "phone_number": "phone_number",
+            "phone number": "phone_number",
+            "website_url": "website_url",
+            "website url": "website_url",
             "account_password": "account_password",
             "account password": "account_password",
             "password": "account_password",
@@ -1659,6 +1822,8 @@ class StorageManager:
             EXPORT_HEADERS["employee_name"]: record.get("employee_name", ""),
             EXPORT_HEADERS["account_name"]: record.get("account_name", ""),
             EXPORT_HEADERS["username"]: record.get("username", ""),
+            EXPORT_HEADERS["phone_number"]: record.get("phone_number", ""),
+            EXPORT_HEADERS["website_url"]: record.get("website_url", ""),
             EXPORT_HEADERS["account_password"]: record.get("account_password", ""),
             EXPORT_HEADERS["notes"]: record.get("notes", ""),
         }
@@ -1673,6 +1838,8 @@ class StorageManager:
             EXPORT_HEADERS["employee_name"],
             EXPORT_HEADERS["account_name"],
             EXPORT_HEADERS["username"],
+            EXPORT_HEADERS["phone_number"],
+            EXPORT_HEADERS["website_url"],
             EXPORT_HEADERS["account_password"],
             EXPORT_HEADERS["notes"],
         ]

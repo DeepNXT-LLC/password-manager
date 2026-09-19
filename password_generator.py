@@ -21,12 +21,14 @@ DEFAULT_PASSWORD_SETTINGS = {
     "symbols_count": 1,
     "letters_count": 12,
     "capitalize_words": True,
+    "reminder_days": 90,
 }
 SUPPORTED_FORMATS = {
     "word_symbol_word_numbers",
     "word_number_chunks",
     "scrambled",
 }
+SUPPORTED_REMINDER_DAYS = {30, 60, 90, "off"}
 
 
 def _load_json_file(path):
@@ -84,6 +86,21 @@ def _coerce_nonnegative_int(value, default_value):
     except (TypeError, ValueError):
         return default_value
     return parsed if parsed >= 0 else default_value
+
+
+def _normalize_reminder_days(value):
+    """Normalize reminder days to one of 30, 60, 90, or 'off'."""
+    if isinstance(value, str) and value.strip().lower() == "off":
+        return "off"
+
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_PASSWORD_SETTINGS["reminder_days"]
+
+    if parsed in (30, 60, 90):
+        return parsed
+    return DEFAULT_PASSWORD_SETTINGS["reminder_days"]
 
 
 def _resolve_word_list_path():
@@ -154,6 +171,7 @@ def get_password_settings():
     )
     settings["letters_count"] = _coerce_positive_int(raw_settings.get("letters_count"), settings["letters_count"])
     settings["capitalize_words"] = bool(raw_settings.get("capitalize_words", settings["capitalize_words"]))
+    settings["reminder_days"] = _normalize_reminder_days(raw_settings.get("reminder_days", settings["reminder_days"]))
     return settings
 
 
@@ -191,6 +209,11 @@ def update_password_settings(new_settings):
         merged.get("letters_count"), DEFAULT_PASSWORD_SETTINGS["letters_count"]
     )
     merged["capitalize_words"] = bool(merged.get("capitalize_words", True))
+    merged["reminder_days"] = _normalize_reminder_days(
+        merged.get("reminder_days", DEFAULT_PASSWORD_SETTINGS["reminder_days"])
+    )
+    if merged["reminder_days"] not in SUPPORTED_REMINDER_DAYS:
+        raise ValueError("Reminder setting must be 30, 60, 90, or off.")
 
     config_payload, config_path = _get_preferred_config_for_settings()
     if not isinstance(config_payload, dict):
