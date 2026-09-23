@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from password_manager import CATEGORY_LABELS, StorageManager
@@ -71,3 +73,87 @@ def test_malformed_encrypted_backup_is_rejected(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="recognized password categories"):
         manager.import_all_records_from_file(str(backup))
+
+
+@pytest.mark.parametrize("full_backup", [False, True])
+@pytest.mark.parametrize("alias", ["direct", "relative", "symlink", "hardlink"])
+def test_export_rejects_live_vault_destination_without_changing_it(
+    tmp_path, monkeypatch, full_backup, alias
+):
+    monkeypatch.setattr("password_manager.BASE_DIR", str(tmp_path))
+    manager = StorageManager("correct horse battery staple")
+    manager.add_record("password_book", {
+        "employee_name": "Synthetic", "account_name": "Example", "username": "user",
+        "account_password": " synthetic-only ", "notes": "",
+    })
+    before = (tmp_path / "json_files" / "password_data.vault").read_bytes()
+    destination = manager.vault_path
+    if alias == "relative":
+        destination = os.path.join(tmp_path, "json_files", "..", "json_files", "password_data.vault")
+    elif alias in ("symlink", "hardlink"):
+        destination = str(tmp_path / f"{alias}.vault")
+        try:
+            if alias == "symlink":
+                os.symlink(manager.vault_path, destination)
+            else:
+                os.link(manager.vault_path, destination)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"{alias} unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="active vault"):
+        if full_backup:
+            manager.export_all_records_to_file(destination)
+        else:
+            manager.export_records_to_file("password_book", destination)
+
+    assert (tmp_path / "json_files" / "password_data.vault").read_bytes() == before
+    assert len(manager.fetch_records("password_book")) == 1
+
+
+@pytest.mark.parametrize("full_backup", [False, True])
+def test_export_refuses_to_replace_existing_backup(tmp_path, monkeypatch, full_backup):
+    monkeypatch.setattr("password_manager.BASE_DIR", str(tmp_path))
+    manager = StorageManager("correct horse battery staple")
+    backup = tmp_path / "backup.vault"
+    if full_backup:
+        manager.export_all_records_to_file(str(backup))
+    else:
+        manager.export_records_to_file("password_book", str(backup))
+    original = backup.read_bytes()
+
+    with pytest.raises(FileExistsError):
+        if full_backup:
+            manager.export_all_records_to_file(str(backup))
+        else:
+            manager.export_records_to_file("password_book", str(backup))
+    assert backup.read_bytes() == original
+
+
+@pytest.mark.parametrize("full_backup", [False, True])
+def test_export_does_not_overwrite_vault_after_guard_alias_swap(tmp_path, monkeypatch, full_backup):
+    monkeypatch.setattr("password_manager.BASE_DIR", str(tmp_path))
+    manager = StorageManager("correct horse battery staple")
+    vault = tmp_path / "json_files" / "password_data.vault"
+    safe_dir = tmp_path / "safe"
+    safe_dir.mkdir()
+    alias = tmp_path / "export-alias"
+    try:
+        alias.symlink_to(safe_dir, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"directory symlink unavailable: {exc}")
+    destination = alias / "password_data.vault"
+    before = vault.read_bytes()
+    actual_save = __import__("password_manager").save_encrypted_file
+
+    def swap_then_save(*args, **kwargs):
+        alias.unlink()
+        alias.symlink_to(vault.parent, target_is_directory=True)
+        return actual_save(*args, **kwargs)
+
+    monkeypatch.setattr("password_manager.save_encrypted_file", swap_then_save)
+    with pytest.raises(FileExistsError):
+        if full_backup:
+            manager.export_all_records_to_file(str(destination))
+        else:
+            manager.export_records_to_file("password_book", str(destination))
+    assert vault.read_bytes() == before
