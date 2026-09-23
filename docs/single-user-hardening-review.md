@@ -1,8 +1,8 @@
 # Single-user hardening review — proposal for Brandon
 
 This branch starts from `theOrganizedMind/password-manager` at
-`276e5c0a668a77234b95e22ce0ea87884fbc04a0`, copied exactly into the
-private review base before these edits. It is a Windows, one-owner desktop
+`276e5c0a668a77234b95e22ce0ea87884fbc04a0`, copied exactly into an
+isolated review base before these edits. It is a Windows, one-owner desktop
 vault review. It is **not** the separate Azure/multi-user project, a release, or
 proof that the app is production-ready.
 
