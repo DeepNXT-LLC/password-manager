@@ -114,12 +114,15 @@ The remnant warning displayed the isolated vault folder, preservation
 instruction, and no-deletion statement. He then tested the missing-vault
 prompt, chose No, and the app exited without creating a vault while the
 quarantined fake vault and remnant remained. The test setup restored the fake
-vault afterward. This walkthrough supports those
-specific UI outcomes; no Tk version is attributed to this manual run. The
-automated tests assert the prompt wording, folder path, preservation guidance,
-scan scope, and retained files. A separately documented human category-import
-sequence and a current-code Tk 8.6.12 check are not in this evidence. Brandon's
-supported Windows/Tk versions, headed-evidence acceptance, and decision on
+vault afterward. This walkthrough supports those specific UI outcomes; no Tk
+version is attributed to this manual run. The automated tests assert the prompt
+wording, displayed folder path and preservation guidance, that the warning text
+states its scan scope, and that the matched entry and vault remain unchanged.
+The source scans only the live-vault folder; there is no behavioral test of a
+matching entry outside that folder. A separately documented human
+category-import sequence and a current-code Tk 8.6.12 check are not in this
+evidence. Brandon's supported Windows/Tk versions, headed-evidence acceptance,
+and decision on
 excluding the inactive PostgreSQL path remain open. The PR remains a draft for
 Brandon's review.
 
@@ -131,9 +134,10 @@ does not establish physical crash or power-loss durability. A user or other
 program with control of the Windows account can bypass these safeguards.
 
 PostgreSQL import remains unsupported and inactive. Export dialogs suggest
-timestamped names and existing files are not replaced. Startup warns if
-temporary encrypted files remain beside the vault after an interruption; the
-app leaves those files in place for manual review. Deep reports headed Windows
+timestamped names and existing files are not replaced. Startup warns if it
+finds entries beside the vault whose names match the `.vault-*.tmp` pattern;
+it does not verify that each matched entry is a file or encrypted. The app
+leaves those entries in place for manual review. Deep reports headed Windows
 coverage of the import password retry and cancellation; his September 24
 follow-up includes a time-ordered record and screenshots of the visible prompts
 and outcomes. Those images do not independently establish every click, the
@@ -142,13 +146,14 @@ files were not included. Nick's later person-clicked report covers a retained
 temporary file and its warning, but does not establish physical power-loss
 recovery. Deep attests that he personally clicked through startup,
 selection, and Clear on Tk 8.6.12 without a hang on an earlier staged candidate;
-that report does not verify the current app source. Bill's
-partial walkthrough reached a successful full-backup import into a nonempty
-disposable profile, but he stopped before a close/reopen persistence check.
+that report does not verify the current app source. Bill's partial walkthrough
+reached a successful full-backup import into a nonempty disposable profile, but
+he stopped before a close/reopen persistence check.
 Earlier independent settled-code Windows test commands passed 133 cases in
-total with none skipped, including the five symlink/alias cases. Two of Nick's smaller UX
-notes remain: startup does not scan user-selected backup export folders for
-temporary files, and the backup Save picker has no app-provided default folder.
+total with none skipped, including the five symlink/alias cases. Two of Nick's
+smaller UX notes remain: startup does not scan user-selected backup export
+folders for temporary files, and the backup Save picker has no app-provided
+default folder.
 The picker may initially open in Documents according to Nick's earlier report.
 These folder behaviors remain product choices. Neither the tester reports nor
 the synthetic tests establish production readiness.
