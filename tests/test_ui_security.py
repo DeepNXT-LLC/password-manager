@@ -128,6 +128,7 @@ def test_missing_vault_can_cancel_restore_before_master_password_prompt(tmp_path
     assert root.destroyed
     assert len(questions) == 1
     assert questions[0][0] == "Vault Missing"
+    assert "Choose No to exit without modifying or creating a vault." in questions[0][1]
     assert not (tmp_path / "json_files" / "password_data.vault").exists()
 
 
@@ -422,7 +423,12 @@ def test_startup_warns_about_vault_temp_remnant_without_changing_it(tmp_path, mo
     assert root.visible
     assert len(warnings) == 1
     assert warnings[0][0][0] == "Vault Files Need Review"
-    assert "Preserve them" in warnings[0][0][1]
+    warning_text = warnings[0][0][1]
+    assert str(vault_dir) in warning_text
+    assert "Preserve them" in warning_text
+    assert "review these files, the vault, and your backups" in warning_text
+    assert "scanned only this folder" in warning_text
+    assert "has not deleted anything" in warning_text
     assert remnant.exists()
     assert remnant.read_bytes() == remnant_bytes
     assert vault_path.read_bytes() == original_vault_bytes

@@ -2204,7 +2204,7 @@ def main():
     if not os.path.exists(vault_path) and os.path.lexists(initialized_path):
         if not messagebox.askyesno(
             "Vault Missing",
-            "A previously initialized vault is missing. Restore it from a full encrypted backup now? Cancel leaves the vault untouched.",
+            "A previously initialized vault is missing. Restore it from a full encrypted backup now? Choose No to exit without modifying or creating a vault.",
             parent=root,
         ):
             root.destroy()
@@ -2308,9 +2308,10 @@ def main():
     if remnants_present:
         messagebox.showwarning(
             "Vault Files Need Review",
-            "Temporary encrypted files remain beside the vault, possibly from an interrupted "
-            "save. Preserve them and review the vault and backups before cleanup; the app "
-            "has not deleted anything.",
+            f"Temporary encrypted files were found in:\n{vault_dir}\n"
+            "They may be from an interrupted save. Preserve them and review these files, "
+            "the vault, and your backups before deciding whether cleanup is safe. "
+            "The app scanned only this folder and has not deleted anything.",
             parent=root,
         )
     root.deiconify()
