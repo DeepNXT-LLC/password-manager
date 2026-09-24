@@ -14,6 +14,10 @@ application.
 - Passwords masked in the table and form until the owner chooses **Show**
 - Password generation using Python's cryptographically secure `secrets` module
 - Encrypted per-category and full-vault backups using AES-256-GCM and scrypt
+- Encrypted backup imports can use the backup's own master password when it
+  differs from the currently open vault password. Import refuses any account
+  identity already present or repeated in the incoming batch, without changing
+  the destination vault.
 - A new backup filename is required for every export; existing backups and the
   active vault are never deliberately replaced by the export action
 - CSV/XLSX header-only templates for preparing imports
@@ -28,7 +32,8 @@ encrypt, move, or erase those originals; handle and retire them separately.
 - There are no team accounts, roles, sharing rules, audit logs, or recovery
   workflow yet.
 - PostgreSQL is intentionally not used in this stage because the original
-  PostgreSQL schema stores passwords as plaintext.
+  PostgreSQL schema stores passwords as plaintext. Import into that backend is
+  unsupported; the inactive backend is not activated by this review.
 - The application cannot protect secrets from someone who controls the Windows
   account, machine, or process running it.
 - Same-host Windows instances coordinate vault writes, but this is not a
@@ -59,6 +64,9 @@ concurrency, deployment, and operational backup/restore.
   are disabled.
 - Exports do not overwrite an existing filename. Choose a fresh name for each
   backup, and verify that the saved file can be unlocked before relying on it.
+- The export dialog suggests a timestamped filename. If startup finds
+  temporary encrypted files beside the vault, it warns you to preserve and
+  review them; it does not delete them automatically.
 - A selected record must be reloaded if another app window changed it; the app
   refuses a stale edit or deletion instead of silently overwriting that change.
 - Empty CSV/XLSX templates are allowed because they contain no credentials.

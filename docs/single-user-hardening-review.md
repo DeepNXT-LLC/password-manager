@@ -17,6 +17,7 @@ proof that the app is production-ready.
 | Two app instances could read the same vault and silently lose one writer's change. A stale selection could edit/delete even after the record changed away and back within one timestamp second. | Lock full local transactions and require a selection-time snapshot with a monotonic per-record revision; migrate earlier encrypted vault records on unlock. | `tests/test_storage_concurrency.py` and `tests/test_vault_concurrency.py` cover competing writers, stale edits/deletes, the A→B→A sequence, and old-vault revision migration. |
 | A vanished vault was rejected by an already-running instance but silently re-created as empty on restart. A manual “create empty vault, then import backup” recovery could overwrite newer data after an interruption. | Persist a non-secret initialization marker outside the vault directory. When the vault is missing, validate and restore a complete encrypted backup directly, without an intermediate empty vault. Reject unknown top-level backup fields rather than silently drop data from a future format. | `tests/test_storage_concurrency.py` checks same-instance loss, full-directory loss after restart, partial/unknown-format refusal, existing-vault refusal, and synthetic full-backup recovery. The marker is not tamper-proof; deleting both vault and marker defeats this accidental-loss signal. The visible restore and power-loss cases remain unproven. |
 | A contradictory encrypted backup with both flat `records` and category-keyed data could be accepted through category import. | Reject mixed shapes before either import path writes. Keep legitimate partial-category backups supported. | `tests/test_adversarial_repairs.py` checks rejection without vault change and accepted partial backups. |
+| A backup encrypted under another profile's master password could not be imported into an open destination vault. Matching account identities could silently upsert and replace destination passwords. | Accept an optional backup password for category and full imports. Label only selected-backup decryption failures as backup unlock failures. Under the local vault lock, reject any normalized case-insensitive account identity already in the destination or repeated in the batch before one write. | Focused synthetic storage and UI checks passed locally; no visible desktop walkthrough or real vault data is included in this review. |
 
 ## Why these changes matter
 
@@ -42,6 +43,12 @@ has no idle lock or verified crash/power-loss recovery; the local lock covers
 only cooperating same-host app instances; and the manual restore sequence has
 not been walked through with a visible Windows UI. A user or other program
 with control of the Windows account can bypass these application safeguards.
+
+PostgreSQL import remains unsupported and inactive. Export dialogs suggest
+timestamped names and existing files are not replaced. Startup warns if
+temporary encrypted files remain beside the vault after an interruption; the
+app leaves those files in place for manual review. This warning and the import
+password retry have not been proved in a headed Windows UI session.
 
 Questions for Brandon: Are these changes aligned with the intended single-user
 app? Does he want the stricter backup no-overwrite behavior and the local

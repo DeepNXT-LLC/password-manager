@@ -1,6 +1,7 @@
 """Synthetic conflict and transaction checks for the single-owner vault."""
 
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 
 import pytest
@@ -280,6 +281,70 @@ def test_restore_write_failure_leaves_missing_marker_state(tmp_path, monkeypatch
         pm.StorageManager.restore_missing_vault_from_full_backup(str(backup), MASTER)
     assert not vault.exists()
     assert (tmp_path / ".password-vault-initialized").exists()
+
+
+def test_import_preflight_observes_cooperating_writer_update(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pm, "BASE_DIR", str(tmp_path))
+    importer = pm.StorageManager(MASTER)
+    writer = pm.StorageManager(MASTER)
+    writer.add_record("password_book", _record("Original Account"))
+    original = writer.fetch_records("password_book")[0]
+    incoming = {
+        "category": "password_book",
+        "employee_name": "Synthetic Owner",
+        "account_name": "Updated Account",
+        "username": "updated account",
+        "account_password": "synthetic-backup-password",
+    }
+    backup = tmp_path / "concurrent-import.vault"
+    payload = {category: [] for category in pm.CATEGORY_LABELS}
+    payload["password_book"] = [incoming]
+    save_encrypted_file(str(backup), payload, MASTER)
+
+    import_at_lock = threading.Event()
+    writer_done = threading.Event()
+    actual_lock = pm.vault_transaction_lock
+
+    @contextmanager
+    def pause_import_before_lock(path):
+        if threading.current_thread().name == "synthetic-importer":
+            import_at_lock.set()
+            if not writer_done.wait(10):
+                raise AssertionError("Writer did not finish before import lock acquisition")
+        with actual_lock(path):
+            yield
+
+    monkeypatch.setattr(pm, "vault_transaction_lock", pause_import_before_lock)
+    import_errors = []
+
+    def run_import():
+        try:
+            importer.import_all_records_from_file(str(backup))
+        except Exception as exc:
+            import_errors.append(exc)
+
+    import_thread = threading.Thread(target=run_import, name="synthetic-importer")
+    import_thread.start()
+    try:
+        assert import_at_lock.wait(10)
+        updated = _record("Updated Account", "synthetic-writer-update")
+        writer.update_record(
+            "password_book", original["password_id"], updated, expected_record=original
+        )
+        writer_done.set()
+    finally:
+        writer_done.set()
+        import_thread.join(10)
+
+    assert not import_thread.is_alive()
+    assert len(import_errors) == 1
+    assert isinstance(import_errors[0], pm.RecordConflictError)
+    current = writer.fetch_records("password_book")
+    assert len(current) == 1
+    assert current[0]["account_name"] == "Updated Account"
+    assert current[0]["account_password"] == "synthetic-writer-update"
 
 
 def test_missing_whole_vault_directory_after_restart_is_not_reseeded(tmp_path, monkeypatch):

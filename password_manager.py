@@ -65,6 +65,10 @@ class RecordConflictError(ValueError):
     """The selected record changed after it was loaded into the form."""
 
 
+class BackupUnlockError(VaultCryptoError):
+    """The selected encrypted backup could not be unlocked."""
+
+
 GENERATOR_GUIDANCE = (
     "These generator settings or the word list are not safe to use. "
     "Use at least 12 scrambled letters, or choose a valid alphabetic word list "
@@ -411,7 +415,9 @@ class PasswordManagerApp:
         self.tabs[category_key]["selected_snapshot"] = None
 
         tree = self.tabs[category_key]["tree"]
-        tree.selection_remove(tree.selection())
+        current_selection = tree.selection()
+        if current_selection:
+            tree.selection_remove(current_selection)
 
     def read_form(self, category_key):
         """Read the current tab form into a normalized record payload."""
@@ -597,12 +603,36 @@ class PasswordManagerApp:
             return
 
         try:
-            imported, skipped = self.storage.import_records_from_file(category_key, file_path)
+            if file_path.lower().endswith(".vault"):
+                while True:
+                    backup_password = self._prompt_backup_password()
+                    if backup_password is None:
+                        return
+                    try:
+                        imported, skipped = self.storage.import_records_from_file(
+                            category_key, file_path, backup_password=backup_password
+                        )
+                        break
+                    except BackupUnlockError:
+                        if not messagebox.askretrycancel(
+                            "Backup Unlock Failed",
+                            "The backup password did not unlock this file, or the file is damaged. "
+                            "Try again or cancel; no records were imported.",
+                        ):
+                            return
+            else:
+                imported, skipped = self.storage.import_records_from_file(category_key, file_path)
             self.load_tab_data(category_key)
             self.refresh_reminder_tab()
             messagebox.showinfo(
                 "Import Complete",
-                f"Imported or updated: {imported}\nSkipped invalid rows: {skipped}",
+                f"Imported: {imported}\nSkipped invalid rows: {skipped}",
+            )
+        except RecordConflictError:
+            messagebox.showerror(
+                "Import Conflict",
+                "An account in this import matches an existing vault account or another "
+                "incoming row. Nothing was imported. Review the copies before retrying.",
             )
         except Exception as exc:
             self.handle_ui_exception(
@@ -612,9 +642,18 @@ class PasswordManagerApp:
                 exc,
             )
 
+    def _prompt_backup_password(self):
+        """Ask for the password protecting the selected backup, if any."""
+        return simpledialog.askstring(
+            "Unlock Backup",
+            "Enter the master password used for this backup file.\n"
+            "It may differ from the current vault password.",
+            show="*",
+        )
+
     def export_records(self, category_key):
         """Export one category to an encrypted vault backup."""
-        default_name = f"{category_key}_backup"
+        default_name = f"{category_key}_backup_{datetime.now():%Y%m%d_%H%M%S}"
         file_path = filedialog.asksaveasfilename(
             title="Export Password Data",
             defaultextension=".vault",
@@ -683,18 +722,42 @@ class PasswordManagerApp:
             return
 
         try:
-            summary = self.storage.import_all_records_from_file(file_path)
+            if file_path.lower().endswith(".vault"):
+                while True:
+                    backup_password = self._prompt_backup_password()
+                    if backup_password is None:
+                        return
+                    try:
+                        summary = self.storage.import_all_records_from_file(
+                            file_path, backup_password=backup_password
+                        )
+                        break
+                    except BackupUnlockError:
+                        if not messagebox.askretrycancel(
+                            "Backup Unlock Failed",
+                            "The backup password did not unlock this file, or the file is damaged. "
+                            "Try again or cancel; no records were imported.",
+                        ):
+                            return
+            else:
+                summary = self.storage.import_all_records_from_file(file_path)
             self.load_all_tabs()
             self.refresh_reminder_tab()
             messagebox.showinfo(
                 "Import Complete",
                 (
-                    "Imported/updated by category:\n"
+                    "Imported by category:\n"
                     f"Password Book: {summary['password_book']}\n"
                     f"Mobile Devices: {summary['mobile_devices']}\n"
                     f"Computers: {summary['computers']}\n"
                     f"Admin: {summary['admin']}"
                 ),
+            )
+        except RecordConflictError:
+            messagebox.showerror(
+                "Import Conflict",
+                "An account in this import matches an existing vault account or another "
+                "incoming row. Nothing was imported. Review the copies before retrying.",
             )
         except Exception as exc:
             self.handle_ui_exception(
@@ -709,7 +772,7 @@ class PasswordManagerApp:
         file_path = filedialog.asksaveasfilename(
             title="Export Full Backup",
             defaultextension=".vault",
-            initialfile="password_manager_full_backup",
+            initialfile=f"password_manager_full_backup_{datetime.now():%Y%m%d_%H%M%S}",
             filetypes=[
                 ("Encrypted vault files", "*.vault"),
                 ("All files", "*.*"),
@@ -1320,11 +1383,16 @@ class StorageManager:
             raise ValueError("Template export supports .csv or .xlsx only.")
         self._write_tabular_file(file_path, rows=[], include_category=True)
 
-    def import_records_from_file(self, category_key, file_path):
+    def import_records_from_file(self, category_key, file_path, backup_password=None):
         """Import one category from an encrypted vault backup or tabular file."""
         ext = self._file_extension(file_path)
         if ext == ".vault":
-            payload = load_encrypted_file(file_path, self.master_password)
+            try:
+                payload = load_encrypted_file(
+                    file_path, self.master_password if backup_password is None else backup_password
+                )
+            except VaultCryptoError as exc:
+                raise BackupUnlockError("The selected backup could not be unlocked.") from exc
             self._reject_conflicting_backup_shapes(payload)
 
             if isinstance(payload, list):
@@ -1345,12 +1413,17 @@ class StorageManager:
         self._validate_import_record_ids(rows)
         return self._import_records(category_key, rows, enforce_category=True)
 
-    def import_all_records_from_file(self, file_path):
+    def import_all_records_from_file(self, file_path, backup_password=None):
         """Import all categories from an encrypted vault backup or tabular file."""
         ext = self._file_extension(file_path)
 
         if ext == ".vault":
-            payload = load_encrypted_file(file_path, self.master_password)
+            try:
+                payload = load_encrypted_file(
+                    file_path, self.master_password if backup_password is None else backup_password
+                )
+            except VaultCryptoError as exc:
+                raise BackupUnlockError("The selected backup could not be unlocked.") from exc
             self._reject_conflicting_backup_shapes(payload)
 
             if isinstance(payload, dict):
@@ -1443,27 +1516,49 @@ class StorageManager:
     def _import_grouped_rows_atomically(self, grouped_rows):
         """Apply a validated local-vault import in memory and persist it with one save."""
         if self.use_database:
-            summary = {category_key: 0 for category_key in CATEGORY_LABELS}
-            for category_key, records in grouped_rows.items():
-                imported, _skipped = self._import_records(
-                    category_key, records, enforce_category=True
-                )
-                summary[category_key] = imported
-            return summary
+            raise NotImplementedError("Import into PostgreSQL is unsupported in this single-user stage.")
 
         with vault_transaction_lock(self.vault_path):
             data = self._load_json()
+            normalized_by_category = {
+                category_key: [self._normalize_import_row(row) for row in records]
+                for category_key, records in grouped_rows.items()
+            }
+            self._preflight_import_keys(data, normalized_by_category)
             summary = {category_key: 0 for category_key in CATEGORY_LABELS}
-            for category_key, records in grouped_rows.items():
-                for row in records:
-                    normalized = self._normalize_import_row(row)
+            for category_key, rows in normalized_by_category.items():
+                for normalized in rows:
                     self._json_upsert_record_in_data(data, category_key, normalized)
                     summary[category_key] += 1
             self._save_json(data)
             return summary
 
+    @staticmethod
+    def _import_key(category_key, row):
+        """Compare account identity after the same whitespace and case normalization."""
+        return (category_key,) + tuple(
+            row[field].strip().casefold()
+            for field in ("employee_name", "account_name", "username")
+        )
+
+    def _preflight_import_keys(self, data, normalized_by_category):
+        """Reject every destination or batch collision before mutating the payload."""
+        seen = {
+            self._import_key(category_key, row)
+            for category_key in CATEGORY_LABELS
+            for row in data[category_key]
+        }
+        for category_key, rows in normalized_by_category.items():
+            for row in rows:
+                key = self._import_key(category_key, row)
+                if key in seen:
+                    raise RecordConflictError(
+                        "Import contains an existing or repeated account; nothing was imported."
+                    )
+                seen.add(key)
+
     def _import_records(self, category_key, records, enforce_category=False):
-        """Validate and import rows with upsert behavior by employee/account/username."""
+        """Validate and import new rows without replacing existing credentials."""
         self._validate_import_record_ids(records)
         normalized_rows = []
         skipped = 0
@@ -1487,12 +1582,12 @@ class StorageManager:
             normalized_rows.append(normalized)
 
         if self.use_database:
-            for row in normalized_rows:
-                self._db_upsert_record(category_key, row)
+            raise NotImplementedError("Import into PostgreSQL is unsupported in this single-user stage.")
         elif normalized_rows:
             # A category import is one vault transaction, not one write per row.
             with vault_transaction_lock(self.vault_path):
                 data = self._load_json()
+                self._preflight_import_keys(data, {category_key: normalized_rows})
                 for row in normalized_rows:
                     self._json_upsert_record_in_data(data, category_key, row)
                 self._save_json(data)
@@ -2165,6 +2260,22 @@ def main():
     _ = app
     if restored_password is not None:
         messagebox.showinfo("Restore Complete", "The full encrypted backup was restored. Verify the records and create a new backup.", parent=root)
+    vault_dir = os.path.dirname(vault_path)
+    try:
+        remnants_present = any(
+            entry.name.startswith(".vault-") and entry.name.endswith(".tmp")
+            for entry in os.scandir(vault_dir)
+        )
+    except OSError:
+        remnants_present = False
+    if remnants_present:
+        messagebox.showwarning(
+            "Vault Files Need Review",
+            "Temporary encrypted files remain beside the vault, possibly from an interrupted "
+            "save. Preserve them and review the vault and backups before cleanup; the app "
+            "has not deleted anything.",
+            parent=root,
+        )
     root.deiconify()
     root.mainloop()
 
