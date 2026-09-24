@@ -82,30 +82,53 @@ not protection against arbitrary filesystem control.
 
 ### Current review-branch verification
 
-The latest app-code commit is `da23351f55e6ac26a28a03860e65671db977386a`.
+The earlier app-code commit is `da23351f55e6ac26a28a03860e65671db977386a`.
 The subsequent `555ded63afd219c0c0ade7525415841e372abadf` commit adds tests
-without changing app source. On the Titan with Python 3.13.7, Tk 8.6.15, and
-the pinned dependencies, `python -m pytest -q -ra -p no:cacheprovider` returned
-`152 passed in 55.12s` (exit code 0, no skips or failures). This includes five
-new synthetic tests that construct real Tk windows and widgets. They exercise
-startup retry/cancel, the Clear button, encrypted backup export and refusal to
-replace an existing file, wrong-backup-password cancellation without changing
-the destination vault, import from one disposable profile into another, masked
-password display, and reopening the destination with both records intact.
+without changing app source. The later app-code commit
+`2f8f72e8c44c95fba21d22edd1ca5b9a90c2e62d` corrects two recovery
+messages in `password_manager.py` and asserts their wording in
+`tests/test_ui_security.py`; it does not change vault storage behavior.
+On that code, the full command
+`python -m pytest -q -ra -p no:cacheprovider` returned `152 passed in 52.95s`
+(exit code 0, no skips or failures) using an isolated Python 3.13.7 environment
+with Tk 8.6.15. The two focused recovery UI cases returned `2 passed in 1.29s`;
+the scripted real-Tk backup smoke module returned `2 passed in 9.73s`.
+
+The suite includes synthetic tests that construct real Tk windows and widgets.
+They exercise startup retry/cancel, the Clear button, encrypted backup export
+and refusal to replace an existing file, wrong-backup-password cancellation
+without changing the destination vault, import between disposable profiles,
+masked password display, and reopening the destination with both records
+intact.
 
 These tests invoke the app's buttons, but replace native file, password, and
 message dialogs with test doubles. They are scripted real-window checks, not
 human clicks through native dialogs, and do not cover Tk 8.6.12. All vault and
-backup data in these tests are synthetic and disposable. A human Windows check
-of the updated app's native dialogs and Brandon's decision on excluding the
-inactive PostgreSQL path remain open; the pull request remains a draft.
+backup data in these tests are synthetic and disposable. Nick separately
+reports a person-clicked Windows 11 Home 25H2, Python 3.13.14, Tk 8.6.15
+walkthrough on `555ded6`. That build predates the two recovery wording changes
+described here, so his report does not verify the exact current strings.
+
+Bill manually launched a byte-identical disposable copy of the patched app.
+The remnant warning displayed the isolated vault folder, preservation
+instruction, and no-deletion statement. He then tested the missing-vault
+prompt, chose No, and the app exited without creating a vault while the
+quarantined fake vault and remnant remained. The test setup restored the fake
+vault afterward. This walkthrough supports those
+specific UI outcomes; no Tk version is attributed to this manual run. The
+automated tests assert the prompt wording, folder path, preservation guidance,
+scan scope, and retained files. A separately documented human category-import
+sequence and a current-code Tk 8.6.12 check are not in this evidence. Brandon's
+supported Windows/Tk versions, headed-evidence acceptance, and decision on
+excluding the inactive PostgreSQL path remain open. The PR remains a draft for
+Brandon's review.
 
 Residual limits to discuss explicitly: plaintext CSV/XLSX originals remain
 after import; clipboard history and process memory can hold secrets; the app
 has no idle lock or verified crash/power-loss recovery; the local lock covers
-only cooperating same-host app instances; and the missing-vault recovery path
-has not been independently walked through with a visible Windows UI. A user or
-other program with control of the Windows account can bypass these safeguards.
+only cooperating same-host app instances; and the manual remnant walkthrough
+does not establish physical crash or power-loss durability. A user or other
+program with control of the Windows account can bypass these safeguards.
 
 PostgreSQL import remains unsupported and inactive. Export dialogs suggest
 timestamped names and existing files are not replaced. Startup warns if
@@ -115,16 +138,20 @@ coverage of the import password retry and cancellation; his September 24
 follow-up includes a time-ordered record and screenshots of the visible prompts
 and outcomes. Those images do not independently establish every click, the
 reported close/reopen step, or the reported vault hashes, because the vault
-files were not included. The temporary-file warning still lacks equivalent
-headed evidence. Deep attests that he personally clicked through startup,
-selection, and Clear on Tk 8.6.12 without a hang; this is a tester report, not
-an independently observed manual run. Bill's partial Tk 8.6.15 walkthrough
-reached a successful full-backup import into a nonempty disposable profile,
-but he stopped before a close/reopen persistence check. Earlier independent
-settled-code Windows test commands passed 133 cases in total with none
-skipped, including the five symlink/alias cases. The current branch's 152-pass
-run is recorded above. Neither the tester reports nor these synthetic tests
-establish production readiness.
+files were not included. Nick's later person-clicked report covers a retained
+temporary file and its warning, but does not establish physical power-loss
+recovery. Deep attests that he personally clicked through startup,
+selection, and Clear on Tk 8.6.12 without a hang on an earlier staged candidate;
+that report does not verify the current app source. Bill's
+partial walkthrough reached a successful full-backup import into a nonempty
+disposable profile, but he stopped before a close/reopen persistence check.
+Earlier independent settled-code Windows test commands passed 133 cases in
+total with none skipped, including the five symlink/alias cases. Two of Nick's smaller UX
+notes remain: startup does not scan user-selected backup export folders for
+temporary files, and the backup Save picker has no app-provided default folder.
+The picker may initially open in Documents according to Nick's earlier report.
+These folder behaviors remain product choices. Neither the tester reports nor
+the synthetic tests establish production readiness.
 
 Questions for Brandon: Are these changes aligned with the intended single-user
 app? Does he want the stricter backup no-overwrite behavior and the local
