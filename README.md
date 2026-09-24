@@ -80,8 +80,10 @@ the master password used for that backup. The app validates the complete
 backup and restores it directly, without first opening an empty vault. A
 one-category backup cannot be used for full recovery. Do not move/delete the
 initialization marker to bypass this guard. Verify the restored records and
-make a new backup. The restore has synthetic automated tests but has not been
-manually validated on a real desktop or through a power failure.
+make a new backup. The restore has synthetic automated tests. Nick reports a
+person-clicked restore with fake data on a disposable Windows profile; see
+`docs/single-user-hardening-review.md` for its scope and limits. That report
+does not establish recovery through a physical power failure.
 
 ## Installation
 

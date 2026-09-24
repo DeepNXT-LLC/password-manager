@@ -94,6 +94,18 @@ On that code, the full command
 with Tk 8.6.15. The two focused recovery UI cases returned `2 passed in 1.29s`;
 the scripted real-Tk backup smoke module returned `2 passed in 9.73s`.
 
+An independent rerun at review head `1fda4d1341a49dfb471312ce2d971ecadafb1818`
+used the existing Windows Python 3.13.7 environment and disposable pytest
+temporary directories. It returned `152 passed in 56.23s` (exit code 0, no
+reported skips). A separate verbose selection of the five link-safety cases
+returned `5 passed, 27 deselected in 1.52s` (exit code 0); each of the two
+symlink-destination variants, two alias-swap variants, and the sidecar symlink
+case reported `PASSED`. Pytest plugin autoload, bytecode, and the cache provider
+were disabled. A Python wrapper suppressed the parent process's application
+logger during import; multiprocessing children still appended generic
+`storage_backend_selected` entries to the checkout-local log. This is local
+test evidence, not a posted GitHub check or a manual native-dialog run.
+
 The suite includes synthetic tests that construct real Tk windows and widgets.
 They exercise startup retry/cancel, the Clear button, encrypted backup export
 and refusal to replace an existing file, wrong-backup-password cancellation
