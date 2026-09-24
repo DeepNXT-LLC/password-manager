@@ -658,6 +658,7 @@ class PasswordManagerApp:
             title="Export Password Data",
             defaultextension=".vault",
             initialfile=default_name,
+            confirmoverwrite=False,
             filetypes=[
                 ("Encrypted vault files", "*.vault"),
                 ("All files", "*.*"),
@@ -773,6 +774,7 @@ class PasswordManagerApp:
             title="Export Full Backup",
             defaultextension=".vault",
             initialfile=f"password_manager_full_backup_{datetime.now():%Y%m%d_%H%M%S}",
+            confirmoverwrite=False,
             filetypes=[
                 ("Encrypted vault files", "*.vault"),
                 ("All files", "*.*"),
@@ -2192,6 +2194,8 @@ class StorageManager:
 
 def main():
     """Unlock the local vault, then launch the password manager desktop application."""
+    from cryptography.exceptions import InvalidTag
+
     root = tk.Tk()
     root.withdraw()
     vault_path = os.path.join(BASE_DIR, "json_files", "password_data.vault")
@@ -2230,33 +2234,66 @@ def main():
             )
             root.destroy()
             return
-    if os.path.exists(vault_path):
-        master_password = restored_password or simpledialog.askstring(
-            "Unlock Vault", "Enter your master password:", show="*", parent=root
-        )
-        if master_password is None:
+    existing_vault = os.path.exists(vault_path)
+    while True:
+        if existing_vault:
+            master_password = restored_password or simpledialog.askstring(
+                "Unlock Vault", "Enter your master password:", show="*", parent=root
+            )
+            if master_password is None:
+                root.destroy()
+                return
+        else:
+            master_password = simpledialog.askstring(
+                "Create Master Password",
+                "Create a master password (12+ characters). It cannot be recovered:",
+                show="*",
+                parent=root,
+            )
+            if master_password is None:
+                root.destroy()
+                return
+            confirmation = simpledialog.askstring(
+                "Confirm Master Password", "Enter it again:", show="*", parent=root
+            )
+            if confirmation is None:
+                root.destroy()
+                return
+            if master_password != confirmation:
+                if messagebox.askretrycancel(
+                    "Password Mismatch", "The master passwords did not match. Retry?", parent=root
+                ):
+                    continue
+                root.destroy()
+                return
+        if len(master_password) < 12:
+            if messagebox.askretrycancel(
+                "Password Too Short", "The master password must have at least 12 characters. Retry?", parent=root
+            ):
+                continue
             root.destroy()
             return
-    else:
-        master_password = simpledialog.askstring(
-            "Create Master Password",
-            "Create a master password (12+ characters). It cannot be recovered:",
-            show="*",
-            parent=root,
-        )
-        confirmation = simpledialog.askstring(
-            "Confirm Master Password", "Enter it again:", show="*", parent=root
-        ) if master_password is not None else None
-        if master_password != confirmation:
-            messagebox.showerror("Password Mismatch", "The master passwords did not match.", parent=root)
+        try:
+            app = PasswordManagerApp(root, master_password)
+            break
+        except VaultCryptoError as exc:
+            if (
+                existing_vault
+                and restored_password is None
+                and isinstance(exc.__cause__, InvalidTag)
+            ):
+                if messagebox.askretrycancel(
+                    "Vault Locked",
+                    "Unable to unlock the vault. Check the master password or file integrity. Retry?",
+                    parent=root,
+                ):
+                    continue
+            else:
+                messagebox.showerror(
+                    "Vault Locked", "The vault could not be opened. Check the vault and storage files.", parent=root
+                )
             root.destroy()
             return
-    try:
-        app = PasswordManagerApp(root, master_password)
-    except VaultCryptoError as exc:
-        messagebox.showerror("Vault Locked", str(exc), parent=root)
-        root.destroy()
-        return
     _ = app
     if restored_password is not None:
         messagebox.showinfo("Restore Complete", "The full encrypted backup was restored. Verify the records and create a new backup.", parent=root)

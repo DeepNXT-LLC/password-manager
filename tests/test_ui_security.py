@@ -20,6 +20,64 @@ class FakeVar:
         return self.value
 
 
+@pytest.mark.parametrize("full_backup", [False, True])
+def test_backup_export_dialog_disables_replace_prompt_and_refuses_existing_file(
+    tmp_path, monkeypatch, full_backup
+):
+    monkeypatch.setattr(pm, "BASE_DIR", str(tmp_path))
+    storage = pm.StorageManager(PROFILE_MASTER)
+    backup = tmp_path / "existing.vault"
+    if full_backup:
+        storage.export_all_records_to_file(str(backup))
+    else:
+        storage.export_records_to_file("password_book", str(backup))
+    original = backup.read_bytes()
+
+    dialog_options = []
+    warnings = []
+    monkeypatch.setattr(
+        pm.filedialog,
+        "asksaveasfilename",
+        lambda **kwargs: dialog_options.append(kwargs) or str(backup),
+    )
+    monkeypatch.setattr(pm.messagebox, "showwarning", lambda *args: warnings.append(args))
+    app = object.__new__(pm.PasswordManagerApp)
+    app.storage = storage
+
+    if full_backup:
+        app.export_all_records()
+    else:
+        app.export_records("password_book")
+
+    assert len(dialog_options) == 1
+    assert dialog_options[0]["confirmoverwrite"] is False
+    assert backup.read_bytes() == original
+    assert warnings == [
+        ("Backup Exists", "Choose a new backup filename; existing files are not replaced.")
+    ]
+
+
+@pytest.mark.parametrize("full_template", [False, True])
+def test_template_export_dialog_keeps_default_overwrite_options(
+    tmp_path, monkeypatch, full_template
+):
+    dialog_options = []
+    monkeypatch.setattr(
+        pm.filedialog,
+        "asksaveasfilename",
+        lambda **kwargs: dialog_options.append(kwargs) or "",
+    )
+    app = object.__new__(pm.PasswordManagerApp)
+
+    if full_template:
+        app.export_all_template_records()
+    else:
+        app.export_template_records("password_book")
+
+    assert len(dialog_options) == 1
+    assert "confirmoverwrite" not in dialog_options[0]
+
+
 @pytest.mark.parametrize("failure", [
     ValueError("SYNTHETIC_SECRET: weak settings"),
     FileNotFoundError("SYNTHETIC_SECRET: word list path"),
