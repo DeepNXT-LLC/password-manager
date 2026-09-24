@@ -80,6 +80,26 @@ The six deselections were other parameter cases under the three selected test
 functions, not skips. This proves execution in the tested Windows environment,
 not protection against arbitrary filesystem control.
 
+### Current review-branch verification
+
+The latest app-code commit is `da23351f55e6ac26a28a03860e65671db977386a`.
+The subsequent `555ded63afd219c0c0ade7525415841e372abadf` commit adds tests
+without changing app source. On the Titan with Python 3.13.7, Tk 8.6.15, and
+the pinned dependencies, `python -m pytest -q -ra -p no:cacheprovider` returned
+`152 passed in 55.12s` (exit code 0, no skips or failures). This includes five
+new synthetic tests that construct real Tk windows and widgets. They exercise
+startup retry/cancel, the Clear button, encrypted backup export and refusal to
+replace an existing file, wrong-backup-password cancellation without changing
+the destination vault, import from one disposable profile into another, masked
+password display, and reopening the destination with both records intact.
+
+These tests invoke the app's buttons, but replace native file, password, and
+message dialogs with test doubles. They are scripted real-window checks, not
+human clicks through native dialogs, and do not cover Tk 8.6.12. All vault and
+backup data in these tests are synthetic and disposable. A human Windows check
+of the updated app's native dialogs and Brandon's decision on excluding the
+inactive PostgreSQL path remain open; the pull request remains a draft.
+
 Residual limits to discuss explicitly: plaintext CSV/XLSX originals remain
 after import; clipboard history and process memory can hold secrets; the app
 has no idle lock or verified crash/power-loss recovery; the local lock covers
@@ -100,10 +120,11 @@ headed evidence. Deep attests that he personally clicked through startup,
 selection, and Clear on Tk 8.6.12 without a hang; this is a tester report, not
 an independently observed manual run. Bill's partial Tk 8.6.15 walkthrough
 reached a successful full-backup import into a nonempty disposable profile,
-but he stopped before a close/reopen persistence check. The independent
-settled-code Windows test commands passed 133 cases in total with none skipped,
-including the five symlink/alias cases. Neither the tester reports nor these
-synthetic tests establish production readiness.
+but he stopped before a close/reopen persistence check. Earlier independent
+settled-code Windows test commands passed 133 cases in total with none
+skipped, including the five symlink/alias cases. The current branch's 152-pass
+run is recorded above. Neither the tester reports nor these synthetic tests
+establish production readiness.
 
 Questions for Brandon: Are these changes aligned with the intended single-user
 app? Does he want the stricter backup no-overwrite behavior and the local
