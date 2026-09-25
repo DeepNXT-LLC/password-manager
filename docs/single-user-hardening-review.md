@@ -123,14 +123,16 @@ vault and backup data were synthetic and disposable.
 
 ### Current-head Windows/Tk evidence
 
-The following records refer to PR #4 head `542aad659604082a9d281ad7f683ffd28ae5ef39`.
-They distinguish the environment tested from the application's supported
-version policy, which Brandon has not yet decided.
+The following records refer to app code at `2f8f72e8c44c95fba21d22edd1ca5b9a90c2e62d`.
+The subsequent PR commits change documentation only; `password_manager.py`
+is byte-identical. These are observed
+test environments, not an application support policy, which Brandon has not
+yet decided.
 
 | Tk version | Current-head evidence | What remains unverified |
 | --- | --- | --- |
 | 8.6.12 | Python 3.11.15 on Windows 11 Pro 10.0.26100. Deep reports a person-clicked launch with a new empty vault, tab/list interaction, repeated Clear use, and a one-minute responsiveness observation. The ZIP includes a screenshot of the responsive empty vault. The current-head full suite is also reported as 152 passed, 0 failed, 0 skipped. | The person-clicked walkthrough is first-hand evidence, with only partial screenshot corroboration. The ZIP has no vault files or generated `verify-log.txt`; its `verify.py` is the helper source only. The reported disk-state results and all six workflow steps therefore cannot be independently reproduced from this package. The scripted rehearsal is separate corroboration, not human evidence. |
-| 8.6.15 | Python 3.13.7. The current-head automated suite and scripted real-Tk checks are reported passing; the suite result is 152 passed, 0 failed, 0 skipped. Separately, a focused run reports a clean exact `542aad6` HEAD on Windows build 10.0.26200, Python 3.14.2, Tk 8.6.15, isolated venv: 23 passed, 0 failed, 0 skipped across startup retry, scripted real-Tk startup/backup, and selected link tests. | A person-clicked launch on the current PR head remains unverified. The focused run mocked native file, password, and message dialogs, so it is not human-click evidence. Nick's person-clicked report was on an earlier app-code commit. |
+| 8.6.15 | Python 3.13.7. The current-code automated suite and scripted real-Tk checks are reported passing; the suite result is 152 passed, 0 failed, 0 skipped. Separately, a focused run reports a clean exact `542aad6` HEAD on Windows build 10.0.26200, Python 3.14.2, Tk 8.6.15, isolated venv: 23 passed, 0 failed, 0 skipped across startup retry, scripted real-Tk startup/backup, and selected link tests. On Windows 11 Pro build 26200 with Python 3.14.2/Tk 8.6.15, Bill personally created a new fake master password in a fresh disposable copy whose `password_manager.py` SHA-256 matched the current PR file (`3D868546DCB7604FD32F939D8045762862CDB3DDEC8085B903FC3CE4CA33EF58`). The empty main window opened; he clicked each tab, the empty Password Book list, and Clear, then confirmed Reminders opened normally. A contemporaneous Windows process check reported `Responding=True`, and the test folder contained a newly initialized vault; neither observation independently proves Bill's UI clicks. | This establishes a reported person-clicked current-code empty-vault startup and the specific click sequence, not a full six-step backup walkthrough on Tk 8.6.15. No continuous one-minute human observation or video was collected. The focused run mocked native file, password, and message dialogs. Nick's broader person-clicked report was on an earlier app-code commit. |
 
 The exact supported Windows/Tk versions remain Brandon's decision. These two
 Tk versions are observed test environments, not an adopted support range.
