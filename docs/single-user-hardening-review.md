@@ -17,7 +17,7 @@ proof that the app is production-ready.
 | Two app instances could read the same vault and silently lose one writer's change. A stale selection could edit/delete even after the record changed away and back within one timestamp second. | Lock full local transactions and require a selection-time snapshot with a monotonic per-record revision; migrate earlier encrypted vault records on unlock. | `tests/test_storage_concurrency.py` and `tests/test_vault_concurrency.py` cover competing writers, stale edits/deletes, the A→B→A sequence, and old-vault revision migration. |
 | A vanished vault was rejected by an already-running instance but silently re-created as empty on restart. A manual “create empty vault, then import backup” recovery could overwrite newer data after an interruption. | Persist a non-secret initialization marker outside the vault directory. When the vault is missing, validate and restore a complete encrypted backup directly, without an intermediate empty vault. Reject unknown top-level backup fields rather than silently drop data from a future format. | `tests/test_storage_concurrency.py` checks same-instance loss, full-directory loss after restart, partial/unknown-format refusal, existing-vault refusal, and synthetic full-backup recovery. The marker is not tamper-proof; deleting both vault and marker defeats this accidental-loss signal. A visible missing-vault recovery and true power-loss durability remain unproven. |
 | A contradictory encrypted backup with both flat `records` and category-keyed data could be accepted through category import. | Reject mixed shapes before either import path writes. Keep legitimate partial-category backups supported. | `tests/test_adversarial_repairs.py` checks rejection without vault change and accepted partial backups. |
-| A backup encrypted under another profile's master password could not be imported into an open destination vault. Matching account identities could silently upsert and replace destination passwords. | Accept an optional backup password for category and full imports. Label only selected-backup decryption failures as backup unlock failures. Under the local vault lock, reject any normalized case-insensitive account identity already in the destination or repeated in the batch before one write. | Focused synthetic storage and UI checks passed. A headed Windows walkthrough of full-backup import into a nonempty disposable profile is reported and partially corroborated by screenshots; no real vault data was used. A separately documented headed category-import sequence is not included in the follow-up evidence. |
+| A backup encrypted under another profile's master password could not be imported into an open destination vault. Matching account identities could silently upsert and replace destination passwords. | Accept an optional backup password for category and full imports. Label only selected-backup decryption failures as backup unlock failures. Under the local vault lock, reject any normalized case-insensitive account identity already in the destination or repeated in the batch before one write. | Focused synthetic storage and UI checks passed. Deep reports a current-head person-clicked full-backup and category-import walkthrough on disposable profiles, partially corroborated by screenshots; the attached package does not independently establish every step or on-disk result. No real vault data was used. |
 
 ## Why these changes matter
 
@@ -113,13 +113,68 @@ without changing the destination vault, import between disposable profiles,
 masked password display, and reopening the destination with both records
 intact.
 
-These tests invoke the app's buttons, but replace native file, password, and
-message dialogs with test doubles. They are scripted real-window checks, not
-human clicks through native dialogs, and do not cover Tk 8.6.12. All vault and
-backup data in these tests are synthetic and disposable. Nick separately
-reports a person-clicked Windows 11 Home 25H2, Python 3.13.14, Tk 8.6.15
-walkthrough on `555ded6`. That build predates the two recovery wording changes
-described here, so his report does not verify the exact current strings.
+Some synthetic UI tests invoke the app's buttons while replacing native file,
+password, and message dialogs with test doubles. Separately, the current-head
+scripted real-Tk rehearsal used real Tk windows and password dialogs while
+recording and scripting answers to native Windows dialogs. Neither is a
+person-clicked walkthrough. The rehearsal reports five scenarios passed on Tk
+8.6.12; its logs and description are included in Deep's evidence ZIP. All test
+vault and backup data were synthetic and disposable.
+
+### Current-head Windows/Tk evidence
+
+The following records refer to PR #4 head `542aad659604082a9d281ad7f683ffd28ae5ef39`.
+They distinguish the environment tested from the application's supported
+version policy, which Brandon has not yet decided.
+
+| Tk version | Current-head evidence | What remains unverified |
+| --- | --- | --- |
+| 8.6.12 | Python 3.11.15 on Windows 11 Pro 10.0.26100. Deep reports a person-clicked launch with a new empty vault, tab/list interaction, repeated Clear use, and a one-minute responsiveness observation. The ZIP includes a screenshot of the responsive empty vault. The current-head full suite is also reported as 152 passed, 0 failed, 0 skipped. | The person-clicked walkthrough is first-hand evidence, with only partial screenshot corroboration. The ZIP has no vault files or generated `verify-log.txt`; its `verify.py` is the helper source only. The reported disk-state results and all six workflow steps therefore cannot be independently reproduced from this package. The scripted rehearsal is separate corroboration, not human evidence. |
+| 8.6.15 | Python 3.13.7. The current-head automated suite and scripted real-Tk checks are reported passing; the suite result is 152 passed, 0 failed, 0 skipped. Separately, a focused run reports a clean exact `542aad6` HEAD on Windows build 10.0.26200, Python 3.14.2, Tk 8.6.15, isolated venv: 23 passed, 0 failed, 0 skipped across startup retry, scripted real-Tk startup/backup, and selected link tests. | A person-clicked launch on the current PR head remains unverified. The focused run mocked native file, password, and message dialogs, so it is not human-click evidence. Nick's person-clicked report was on an earlier app-code commit. |
+
+The exact supported Windows/Tk versions remain Brandon's decision. These two
+Tk versions are observed test environments, not an adopted support range.
+
+### Deep's current-head person-clicked walkthrough
+
+Deep reports performing all six requested workflow steps by hand on Tk 8.6.12
+and current PR head: full-backup export; import into a fresh profile with a
+different destination password; wrong backup password followed by Retry and a
+successful import; cancellation without changing the destination; closing and
+reopening the destination with its own password and finding the imported
+records; and category-only import into another fresh profile with a different
+destination password. He reports the order as cancel, wrong password, then the
+successful full import, so the destination was not imported twice.
+
+The attached screenshots show the source records, completed full export, real
+backup-unlock prompt, and a responsive empty vault. They do not capture every
+click, the cancel and wrong-password outcomes, the completed imports, the
+reopened destination, or the category-only result. Although the ZIP includes a
+read-only verification helper, it contains neither the referenced vault files
+nor the helper's generated log. Accordingly, the six results are Deep's
+first-hand report with limited attached corroboration; this package does not
+independently establish the reported disk hashes or every human step.
+
+The separate scripted rehearsal reports the same workflow passing in five
+scenarios using real Tk windows and Tk password dialogs; native Windows dialogs
+were recorded and their responses scripted. Its logs are attached. This
+corroborates that the scripted sequence and dialog text work, but it is not a
+person-clicked run.
+
+### Current-head link-safety test evidence
+
+Deep reports running on Windows 11 Pro 10.0.26100, Python 3.11.15, in a
+standard account with Developer Mode enabled (symlink privilege active) and a
+fresh environment from pinned requirements. On current head, the targeted
+command `python -m pytest -q -rs -k "symlink or alias_swap"` returned
+`5 passed, 147 deselected` and zero skips. The full command
+`python -m pytest -q` returned `152 passed, 0 failed, 0 skipped`. On a standard
+Windows account without symlink privilege, the five targeted cases skip with
+WinError 1314; they are skips, not passes. This evidence verifies the tested
+defenses only, not protection against arbitrary control of the Windows account
+or filesystem.
+
+### Bill's focused recovery-message walkthrough
 
 Bill manually launched a byte-identical disposable copy of the patched app.
 The remnant warning displayed the isolated vault folder, preservation
@@ -131,12 +186,14 @@ version is attributed to this manual run. The automated tests assert the prompt
 wording, displayed folder path and preservation guidance, that the warning text
 states its scan scope, and that the matched entry and vault remain unchanged.
 The source scans only the live-vault folder; there is no behavioral test of a
-matching entry outside that folder. A separately documented human
-category-import sequence and a current-code Tk 8.6.12 check are not in this
-evidence. Brandon's supported Windows/Tk versions, headed-evidence acceptance,
-and decision on
-excluding the inactive PostgreSQL path remain open. The PR remains a draft for
-Brandon's review.
+matching entry outside that folder. Brandon accepted the PostgreSQL scope
+boundary on September 25, provided it remains explicit: the encrypted local
+vault is the only supported backend covered here; PostgreSQL stays inactive and
+unsupported and its imports are refused; cross-backend stale-write parity is
+deferred; and this PR adds no database service or multi-user readiness. His
+exact supported Windows/Tk versions remain undecided, and he requested that the
+PR remain a draft pending final review of the current evidence and
+documentation.
 
 Residual limits to discuss explicitly: plaintext CSV/XLSX originals remain
 after import; clipboard history and process memory can hold secrets; the app
@@ -145,22 +202,18 @@ only cooperating same-host app instances; and the manual remnant walkthrough
 does not establish physical crash or power-loss durability. A user or other
 program with control of the Windows account can bypass these safeguards.
 
-PostgreSQL import remains unsupported and inactive. Export dialogs suggest
+PostgreSQL import remains unsupported and inactive, as accepted by Brandon for
+this PR's stated scope. Export dialogs suggest
 timestamped names and existing files are not replaced. Startup warns if it
 finds entries beside the vault whose names match the `.vault-*.tmp` pattern;
 it does not verify that each matched entry is a file or encrypted. The app
-leaves those entries in place for manual review. Deep reports headed Windows
-coverage of the import password retry and cancellation; his September 24
-follow-up includes a time-ordered record and screenshots of the visible prompts
-and outcomes. Those images do not independently establish every click, the
-reported close/reopen step, or the reported vault hashes, because the vault
-files were not included. Nick's later person-clicked report covers a retained
-temporary file and its warning, but does not establish physical power-loss
-recovery. Deep attests that he personally clicked through startup,
-selection, and Clear on Tk 8.6.12 without a hang on an earlier staged candidate;
-that report does not verify the current app source. Bill's partial walkthrough
-reached a successful full-backup import into a nonempty disposable profile, but
-he stopped before a close/reopen persistence check.
+leaves those entries in place for manual review. Deep's September 25 current-head
+walkthrough report covers the full-backup and category-import sequence, but its
+attached evidence remains partial as described above. Nick's person-clicked
+report covers a retained temporary file and its warning, but does not establish
+physical power-loss recovery. Bill's earlier partial walkthrough reached a
+successful full-backup import into a nonempty disposable profile, but he stopped
+before a close/reopen persistence check.
 Earlier independent settled-code Windows test commands passed 133 cases in
 total with none skipped, including the five symlink/alias cases. Two of Nick's
 smaller UX notes remain: startup does not scan user-selected backup export
