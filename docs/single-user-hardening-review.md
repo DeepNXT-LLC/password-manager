@@ -125,24 +125,28 @@ vault and backup data were synthetic and disposable.
 
 The following records refer to app code at `2f8f72e8c44c95fba21d22edd1ca5b9a90c2e62d`.
 The subsequent PR commits change documentation only; `password_manager.py`
-is byte-identical. These are observed
-test environments, not an application support policy, which Brandon has not
-yet decided.
+is byte-identical. In his September 26 review, Brandon stated an **initial
+intended support range** of Windows 11 with Tk 8.6.12 through 8.6.15 as
+bundled with supported CPython installations. This is the owner's proposed
+scope, not proof that every version in the range has been directly tested.
 
 | Tk version | Current-head evidence | What remains unverified |
 | --- | --- | --- |
 | 8.6.12 | Python 3.11.15 on Windows 11 Pro 10.0.26100. Deep reports a person-clicked launch with a new empty vault, tab/list interaction, repeated Clear use, and a one-minute responsiveness observation. The ZIP includes a screenshot of the responsive empty vault. The current-head full suite is also reported as 152 passed, 0 failed, 0 skipped. | The person-clicked walkthrough is first-hand evidence, with only partial screenshot corroboration. The ZIP has no vault files or generated `verify-log.txt`; its `verify.py` is the helper source only. The reported disk-state results and all six workflow steps therefore cannot be independently reproduced from this package. The scripted rehearsal is separate corroboration, not human evidence. |
 | 8.6.15 | Python 3.13.7. The current-code automated suite and scripted real-Tk checks are reported passing; the suite result is 152 passed, 0 failed, 0 skipped. Separately, a focused run reports a clean exact `542aad6` HEAD on Windows build 10.0.26200, Python 3.14.2, Tk 8.6.15, isolated venv: 23 passed, 0 failed, 0 skipped across startup retry, scripted real-Tk startup/backup, and selected link tests. On Windows 11 Pro build 26200 with Python 3.14.2/Tk 8.6.15, Bill personally created a new fake master password in a fresh disposable copy whose `password_manager.py` SHA-256 matched the current PR file (`3D868546DCB7604FD32F939D8045762862CDB3DDEC8085B903FC3CE4CA33EF58`). The empty main window opened; he clicked each tab, the empty Password Book list, and Clear, then confirmed Reminders opened normally. A contemporaneous Windows process check reported `Responding=True`, and the test folder contained a newly initialized vault; neither observation independently proves Bill's UI clicks. | This establishes a reported person-clicked current-code empty-vault startup and the specific click sequence, not a full six-step backup walkthrough on Tk 8.6.15. No continuous one-minute human observation or video was collected. The focused run mocked native file, password, and message dialogs. Nick's broader person-clicked report was on an earlier app-code commit. |
 
-The exact supported Windows/Tk versions remain Brandon's decision. These two
-Tk versions are observed test environments, not an adopted support range.
+Tk 8.6.13 and 8.6.14 are included in Brandon's initial intended range but
+have no separately documented person-clicked checks in this PR. The table
+records direct observations on 8.6.12 and 8.6.15 only; neither the scripted
+tests nor one version's human report establishes another version's behavior.
 
 ### Deep's current-head person-clicked walkthrough
 
 Deep reports performing all six requested workflow steps by hand on Tk 8.6.12
-and current PR head: full-backup export; import into a fresh profile with a
-different destination password; wrong backup password followed by Retry and a
-successful import; cancellation without changing the destination; closing and
+and app code at `2f8f72e8c44c95fba21d22edd1ca5b9a90c2e62d` (later PR
+commits changed documentation only): full-backup export; import into a fresh
+profile with a different destination password; wrong backup password followed
+by Retry and a successful import; cancellation without changing the destination; closing and
 reopening the destination with its own password and finding the imported
 records; and category-only import into another fresh profile with a different
 destination password. He reports the order as cancel, wrong password, then the
@@ -193,9 +197,27 @@ boundary on September 25, provided it remains explicit: the encrypted local
 vault is the only supported backend covered here; PostgreSQL stays inactive and
 unsupported and its imports are refused; cross-backend stale-write parity is
 deferred; and this PR adds no database service or multi-user readiness. His
-exact supported Windows/Tk versions remain undecided, and he requested that the
-PR remain a draft pending final review of the current evidence and
-documentation.
+September 26 review states an initial intended Windows 11/Tk 8.6.12-8.6.15
+range, while leaving acceptance of the evidence and any further validation to
+his owner-level review. He requested that the PR remain Draft until that review.
+
+### PR check availability and reproducibility limit
+
+For the current PR head, `gh pr checks 4 --repo theOrganizedMind/password-manager`
+reported `no checks reported on the 'review/brandon-single-user-pr-2026-09-23'
+branch` and exited 1. This branch has no `.github` workflow directory, so no
+GitHub Actions Windows/Tk run is attached to the PR. That absence is **not**
+equivalent to a reproducible GitHub check or proof of failure. The local
+commands, Windows/Python/Tk environments, exit codes where recorded, and
+pass/skip counts above are the available local evidence. The exact invocation
+and exit code for the separate 23-case focused run are not established by this
+review document. Deep's reported local full-suite and symlink-enabled runs
+provide commands and summary counts, but their process exit codes and the
+referenced vault artifacts are not in the attached package; they must not be
+presented as hosted CI results. In the documented local runs, `152 passed` and
+`5 passed, 147 deselected` mean zero
+reported skips; on an account without symlink privilege, those five cases skip
+rather than pass.
 
 Residual limits to discuss explicitly: plaintext CSV/XLSX originals remain
 after import; clipboard history and process memory can hold secrets; the app
