@@ -169,12 +169,16 @@ person-clicked run.
 
 ### Current-head link-safety test evidence
 
-Deep reports running on Windows 11 Pro 10.0.26100, Python 3.11.15, in a
-standard account with Developer Mode enabled (symlink privilege active) and a
-fresh environment from pinned requirements. On current head, the targeted
-command `python -m pytest -q -rs -k "symlink or alias_swap"` returned
-`5 passed, 147 deselected` and zero skips. The full command
-`python -m pytest -q` returned `152 passed, 0 failed, 0 skipped`. On a standard
+In his [current-code PR report](https://github.com/theOrganizedMind/password-manager/pull/4#issuecomment-5839509925),
+Deep attributes the runs to Windows 11 Pro 10.0.26100, Python 3.11.15,
+Tk 8.6.12, a standard account with Developer Mode enabled (symlink privilege
+active), and a fresh environment from pinned requirements. The report gives
+the targeted command as `pytest -q -rs -k "symlink or alias_swap"` and reports
+five passed with zero skips. This is not an independently attached pytest
+transcript. Deep's comment reports the full suite as
+`152 passed, 0 failed, 0 skipped`; the PR comment does not separately show the
+full-suite command, process exit code, or a run-specific environment printout.
+These are attributed results, not a hosted CI check. On a standard
 Windows account without symlink privilege, the five targeted cases skip with
 WinError 1314; they are skips, not passes. This evidence verifies the tested
 defenses only, not protection against arbitrary control of the Windows account
@@ -215,7 +219,7 @@ review document. Deep's reported local full-suite and symlink-enabled runs
 provide commands and summary counts, but their process exit codes and the
 referenced vault artifacts are not in the attached package; they must not be
 presented as hosted CI results. In the documented local runs, `152 passed` and
-`5 passed, 147 deselected` mean zero
+Deep's reported `5 passed` mean zero
 reported skips; on an account without symlink privilege, those five cases skip
 rather than pass.
 
